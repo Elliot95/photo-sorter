@@ -8,7 +8,7 @@ Quickly sort thousands of photos and videos one at a time with a click or a key.
 A side panel shows each photo's details: date taken, camera, lens, settings, size and location.
 
 Photos are **moved** into the sorted folders by default, so whatever is left in your folder is what you haven't sorted yet. Prefer to leave your folder untouched? Choose **Copy** instead.
-**Nothing is ever deleted.** Even `Delete` is just a folder, and Undo puts a photo back where it came from.
+**Nothing is ever deleted.** Even `Delete` is just a folder, and Undo puts a photo back where it came from. When you're done, one click tidies away the empty folders that moving leaves behind.
 Close it whenever you like. Next time, click **Continue** under **Pick up where you left off** on the first screen, or **Open a progress file…** to pick the `.photo_sorter_log.jsonl` from any sorted folder.
 
 ---
@@ -120,7 +120,8 @@ No videos in your folder? Nothing changes. It works just like before.
 The small print. It's also on the **Notes** tab in the app.
 
 **Space and safety**
-- **Move** (the default) takes each photo out of your folder and into the sorted folder, so what's left behind is what you haven't sorted yet, plus anything skipped. Empty folders are left in place.
+- **Move** (the default) takes each photo out of your folder and into the sorted folder, so what's left behind is what you haven't sorted yet, plus anything skipped. Folders it empties stay until you click **Remove empty folders** (on the summary screen, or when you open the folder again).
+- **Remove empty folders** only takes folders with nothing in them (at most a `Thumbs.db`, `.DS_Store` or `desktop.ini` thumbnail file). It always asks first, checks each folder again just before removing it, and never touches your top folder, the sorted folder or hidden folders. Undo puts a folder back if it needs to.
 - The app never deletes anything. The `Delete` folder is just a folder: emptying it is up to you. Undo moves the photo back where it came from.
 - Moving to the same drive is instant and needs no extra space. Moving to another drive copies the photo, checks the copy, then removes the original, so it's slower.
 - If a photo can't be moved (for example, it's open in another program), you get an error and the photo and its RAW / clip all stay where they were. Nothing is left half-moved.

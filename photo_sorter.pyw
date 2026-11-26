@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -69,7 +70,7 @@ JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db", "ehthumbs_
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "2.2"
+VERSION = "2.3"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -79,7 +80,10 @@ DEFAULT_CATEGORIES = "Friends\nHoliday\nCats\nFamily\nOther"
 NOTES = [
     ("Space and safety", [
         "Move (the default) takes each photo out of your folder and into the sorted folder, so what's left behind "
-        "is what you haven't sorted yet, plus anything skipped. Empty folders are left in place.",
+        "is what you haven't sorted yet, plus anything skipped. Folders it empties are left in place until you "
+        "click “Remove empty folders” (on the summary, or when you open the folder again).",
+        "Remove empty folders only takes folders with nothing in them (at most a Thumbs.db / .DS_Store / desktop.ini "
+        "thumbnail file). It always asks first, and never touches your top folder, the sorted folder or hidden folders.",
         "The app never deletes anything. The Delete folder is just a folder: emptying it is up to you. "
         "Undo moves the photo back where it came from.",
         "Moving to the same drive is instant and needs no extra space. Moving to another drive copies the photo, "
@@ -249,6 +253,46 @@ def skip(report, dirpath, name, kind):
     except OSError:
         pass
     entry["paths"].append(full)
+
+
+def find_empty_folders(root, keep=()):
+    """Folders under root with nothing in them - at most a Windows/Mac thumbnail file (Thumbs.db, .DS_Store,
+    desktop.ini). Deepest first. Never root itself, never the sorted folder, never hidden (.dot) folders."""
+    keep = [norm(k) for k in keep if k]
+    root_n = norm(root)
+    empty, result = set(), []
+    for dirpath, dirs, files in os.walk(root, topdown=False):
+        n = norm(dirpath)
+        if n == root_n:
+            continue
+        if any(n == k or n.startswith(k + os.sep) or k.startswith(n + os.sep) for k in keep):
+            continue  # the sorted folder, anything in it, or a folder that holds it
+        if any(part.startswith(".") for part in os.path.relpath(dirpath, root).split(os.sep)):
+            continue
+        if all(f.lower() in JUNK_NAMES for f in files) and all(norm(os.path.join(dirpath, d)) in empty for d in dirs):
+            empty.add(n)
+            result.append(dirpath)
+    return result
+
+
+def remove_empty_folders(folders):
+    """Remove folders from find_empty_folders (deepest first). Each is checked again right before it goes:
+    if anything other than a thumbnail file has appeared, it's left alone. Returns how many were removed."""
+    removed = 0
+    for d in folders:
+        try:
+            names = os.listdir(d)
+            if any(f.lower() not in JUNK_NAMES or not os.path.isfile(os.path.join(d, f)) for f in names):
+                continue
+            for f in names:
+                path = os.path.join(d, f)
+                os.chmod(path, stat.S_IWRITE)  # desktop.ini is often read-only
+                os.remove(path)
+            os.rmdir(d)  # Windows refuses if it isn't empty, so this can never take a photo with it
+            removed += 1
+        except OSError:
+            pass  # in use / no permission - leave it
+    return removed
 
 
 def find_photos(folder, include_subfolders, skip_folder):
@@ -1054,6 +1098,7 @@ class PhotoSorter:
             "Move (the default): each photo leaves your folder for the sorted folder, so whatever is left is still to sort.",
             "Copy: your folder stays exactly as it was. Needs free space roughly equal to what you're sorting.",
             "The Delete folder is just a folder. Check it, then delete it yourself once you're happy.",
+            "Moving leaves empty folders behind. Click Remove empty folders on the summary to tidy them away (it asks first).",
             "Undo (Backspace) puts the last photo back where it came from, so mistakes are easy to fix.",
         ])
         card("Good to know", [
@@ -1498,6 +1543,9 @@ class PhotoSorter:
             self.button(row, "Open skipped list", lambda: os.startfile(self.skipped_file),
                         color="#555555").pack(side="left", padx=8)
         self.button(row, "Back", self.show_setup, color="#555555").pack(side="left", padx=(0 if self.skipped_file else 8, 0))
+        tidy = self.empty_folders_button(row)
+        if tidy:
+            tidy.pack(side="left", padx=(8, 0))
         if not photos:
             self.label(box, "No photos or videos found in that folder.", 11, True, color="#e06c6c").pack(anchor="w", pady=(12, 0))
 
@@ -1974,6 +2022,40 @@ class PhotoSorter:
             self.show_main_buttons()
             self.show_current()
 
+    def empty_folders_button(self, parent):
+        """A 'Remove N empty folders' button, or None if there aren't any."""
+        try:
+            folders = find_empty_folders(self.src, keep=[self.out])
+        except Exception:
+            folders = []
+        if not folders:
+            return None
+        n = len(folders)
+        b = self.button(parent, f"Remove {n:,} empty folder{'s' if n != 1 else ''}", None, color="#555555")
+        b.config(command=lambda: self.remove_empty(b))
+        return b
+
+    def remove_empty(self, btn):
+        folders = find_empty_folders(self.src, keep=[self.out])  # look again - things may have changed
+        if not folders:
+            btn.config(text="No empty folders", state="disabled")
+            return
+        n = len(folders)
+        shown = sorted((os.path.relpath(f, self.src) for f in folders), key=lambda r: (r.count(os.sep), r.lower()))
+        listing = "\n".join("   " + r for r in shown[:8]) + (f"\n   …and {n - 8:,} more" if n > 8 else "")
+        if not messagebox.askyesno(
+                "Remove empty folders",
+                f"Remove {n:,} empty folder{'s' if n != 1 else ''} from\n{self.src}?\n\n{listing}\n\n"
+                "They have nothing in them (at most a Windows thumbnail file like Thumbs.db). "
+                "No photos or other files are touched."):
+            return
+        removed = remove_empty_folders(folders)
+        left = n - removed
+        btn.config(text=f"✓ Removed {removed:,} empty folder{'s' if removed != 1 else ''}", state="disabled")
+        if left:
+            messagebox.showinfo("Remove empty folders", f"{left:,} couldn't be removed (open in another window, "
+                                "or something was added). They've been left as they are.")
+
     def back_to_menu(self):
         self.cache.clear()
         self.show_setup()
@@ -2131,6 +2213,9 @@ class PhotoSorter:
         self.button(row, "Open sorted folder", lambda: os.startfile(self.out), color=GREEN).pack(side="left")
         self.button(row, "↶ Undo last", self.undo, color="#555555").pack(side="left", padx=8)
         self.button(row, "Back to menu", self.show_setup, color="#555555").pack(side="left")
+        tidy = self.empty_folders_button(row)
+        if tidy:
+            tidy.pack(side="left", padx=(8, 0))
         self.key_handler = lambda e: self.undo() if e.keysym in ("BackSpace", "z") else None
 
 
