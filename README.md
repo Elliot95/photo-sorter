@@ -5,6 +5,8 @@ Quickly sort thousands of photos one at a time with a click or a key. No Bridge,
 - **Round 1:** Keep or Delete
 - **Round 2:** sort the keepers into your own folders (Friends, Holiday, Cats…)
 
+A side panel shows each photo's details: date taken, camera, lens, settings, size and location.
+
 Photos are **copied**, never moved or deleted, so your originals are always safe.
 Close it whenever you like. Next time you open the same folder, it picks up where you left off.
 
@@ -35,6 +37,7 @@ Double-click **`PhotoSorter.exe`**. In the window that opens:
 | `N` or `←` | **No**: copy to `Delete` |
 | `Space` | Skip for now (it comes back next time) |
 | `Backspace` | Undo the last one |
+| `I` | Show or hide the photo details panel |
 | `Esc` | Back to the menu |
 
 ### Round 2: your own folders

@@ -131,24 +131,110 @@ def unique_dest(folder, filename):
     return dest
 
 
+def _num(v):
+    try:
+        return float(v)
+    except Exception:
+        try:
+            return v[0] / v[1]
+        except Exception:
+            return None
+
+
+def _clean(v):
+    if isinstance(v, bytes):
+        v = v.decode("utf-8", "ignore")
+    return str(v).strip("\x00 ").strip()
+
+
+def _gps(gps):
+    def deg(vals, ref):
+        d, m, s = (_num(x) for x in vals)
+        val = d + m / 60 + s / 3600
+        return -val if ref in ("S", "W") else val
+    lat = deg(gps[2], _clean(gps.get(1, "N")))
+    lon = deg(gps[4], _clean(gps.get(3, "E")))
+    return f"{abs(lat):.5f}° {'S' if lat < 0 else 'N'}, {abs(lon):.5f}° {'W' if lon < 0 else 'E'}"
+
+
+def read_metadata(path, img):
+    """Everything worth knowing about a photo, as (label, value) pairs for the side panel."""
+    meta = []
+    st = os.stat(path)
+    size = st.st_size
+    meta.append(("File", os.path.basename(path)))
+    meta.append(("Type", (img.format if img else os.path.splitext(path)[1][1:]).upper()))
+    meta.append(("Size", f"{size / 1048576:.1f} MB" if size >= 1048576 else f"{size / 1024:.0f} KB"))
+    if img is None:
+        meta.append(("Modified", datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y, %H:%M")))
+        return meta, ""
+    w, h = img.size
+    meta.append(("Dimensions", f"{w:,} × {h:,}  ({w * h / 1e6:.1f} MP)"))
+
+    exif, ex = {}, {}
+    try:
+        exif = img.getexif()
+        ex = exif.get_ifd(0x8769)
+    except Exception:
+        pass
+
+    taken = ex.get(36867) or exif.get(306)
+    if taken:
+        try:
+            caption = datetime.strptime(_clean(taken)[:19], "%Y:%m:%d %H:%M:%S").strftime("%d %b %Y, %H:%M")
+        except Exception:
+            caption = _clean(taken)
+        meta.insert(0, ("Date taken", caption))
+    else:
+        caption = datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y (file date)")
+        meta.insert(0, ("Date taken", "Unknown - file date " + caption.split(" (")[0]))
+
+    make, model = _clean(exif.get(271, "")), _clean(exif.get(272, ""))
+    if model and make and not model.lower().startswith(make.lower().split()[0]):
+        model = f"{make} {model}"
+    if model or make:
+        meta.append(("Camera", model or make))
+    if ex.get(0xA434):
+        meta.append(("Lens", _clean(ex[0xA434])))
+
+    settings = []
+    f = _num(ex.get(0x829D))
+    if f:
+        settings.append(f"f/{f:.1f}".replace(".0", ""))
+    t = _num(ex.get(0x829A))
+    if t:
+        settings.append(f"1/{round(1 / t)}s" if t < 1 else f"{t:g}s")
+    iso = ex.get(0x8827)
+    if iso:
+        settings.append(f"ISO {iso[0] if isinstance(iso, tuple) else iso}")
+    fl = _num(ex.get(0x920A))
+    if fl:
+        settings.append(f"{fl:g} mm")
+    if settings:
+        meta.append(("Settings", "  ·  ".join(settings)))
+    if ex.get(0x9209) is not None:
+        meta.append(("Flash", "Fired" if int(ex[0x9209]) & 1 else "Off"))
+
+    try:
+        gps = exif.get_ifd(0x8825)
+        if 2 in gps and 4 in gps:
+            meta.append(("Location", _gps(gps)))
+    except Exception:
+        pass
+    if exif.get(305):
+        meta.append(("Software", _clean(exif[305])))
+    orient = exif.get(274)
+    if orient and orient != 1:
+        meta.append(("Orientation", {3: "Upside down", 6: "Rotated 90° (fixed)", 8: "Rotated 270° (fixed)"}.get(orient, str(orient))))
+    return meta, caption
+
+
 def load_preview(path, max_w, max_h):
-    """Open an image, fix its rotation, shrink it to fit the screen. Runs in a background thread."""
-    info = ""
+    """Open an image, read its details, fix its rotation, shrink it to fit the screen.
+    Runs in a background thread."""
     try:
         img = Image.open(path)
-        taken = None
-        try:
-            exif = img.getexif()
-            taken = exif.get_ifd(0x8769).get(36867) or exif.get(306)
-        except Exception:
-            pass
-        if taken:
-            try:
-                info = datetime.strptime(str(taken)[:19], "%Y:%m:%d %H:%M:%S").strftime("%d %b %Y, %H:%M")
-            except Exception:
-                info = str(taken)
-        else:
-            info = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%d %b %Y (file date)")
+        meta, info = read_metadata(path, img)
         try:
             img.draft("RGB", (max_w, max_h))  # fast JPEG decode at reduced size
         except Exception:
@@ -157,9 +243,13 @@ def load_preview(path, max_w, max_h):
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
         img.thumbnail((max_w, max_h), Image.LANCZOS)
-        return img, info
+        return img, info, meta
     except Exception as e:
-        return None, f"Can't preview this file ({type(e).__name__})"
+        try:
+            meta, _ = read_metadata(path, None)
+        except Exception:
+            meta = [("File", os.path.basename(path))]
+        return None, f"Can't preview this file ({type(e).__name__})", meta
 
 
 # ---------------------------------------------------------------- app
@@ -345,11 +435,25 @@ class PhotoSorter:
         self.name_lbl = self.label(top, "", 10, color=MUTED)
         self.name_lbl.pack(side="right", padx=16)
 
+        bottom = tk.Frame(self.frame, bg=PANEL, padx=12, pady=12)
+        bottom.pack(side="bottom", fill="x")
+
+        # photo details panel on the right (press I to hide/show)
+        self.side = tk.Frame(self.frame, bg=PANEL, width=330)
+        self.side.pack_propagate(False)
+        self.meta_text = tk.Text(self.side, bg=PANEL, fg=FG, relief="flat", wrap="word",
+                                 font=("Segoe UI", 10), padx=16, pady=14, cursor="arrow",
+                                 takefocus=0, highlightthickness=0, borderwidth=0)
+        self.meta_text.tag_configure("head", font=("Segoe UI", 13, "bold"), spacing3=8)
+        self.meta_text.tag_configure("label", foreground=MUTED, font=("Segoe UI", 9), spacing1=8)
+        self.meta_text.tag_configure("value", font=("Segoe UI", 11), spacing3=2)
+        self.meta_text.tag_configure("hint", foreground=MUTED, font=("Segoe UI", 8), spacing1=18)
+        self.meta_text.pack(fill="both", expand=True)
+        if self.settings.get("show_info", True):
+            self.side.pack(side="right", fill="y")
+
         self.canvas = tk.Canvas(self.frame, bg=BG, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-
-        bottom = tk.Frame(self.frame, bg=PANEL, padx=12, pady=12)
-        bottom.pack(fill="x")
         self.button(bottom, "↶ Undo  (Backspace)", self.undo, color="#555555", size=10).pack(side="left")
         self.button(bottom, "Skip  (Space)", self.skip, color="#555555", size=10).pack(side="right")
         mid = tk.Frame(bottom, bg=PANEL)
@@ -378,10 +482,12 @@ class PhotoSorter:
         self.show_current()
 
     def on_key(self, e):
-        if isinstance(e.widget, (tk.Entry, tk.Text)):
+        if isinstance(e.widget, (tk.Entry, tk.Text)) and e.widget is not getattr(self, "meta_text", None):
             return
         key = e.keysym if len(e.keysym) > 1 else e.keysym.lower()
-        if key in self.keymap:
+        if key == "i":
+            self.toggle_info()
+        elif key in self.keymap:
             self.choose(self.keymap[key])
         elif key == "space":
             self.skip()
@@ -389,6 +495,29 @@ class PhotoSorter:
             self.undo()
         elif key == "Escape":
             self.back_to_menu()
+
+    def toggle_info(self):
+        show = not self.side.winfo_ismapped()
+        if show:
+            self.side.pack(side="right", fill="y", before=self.canvas)
+        else:
+            self.side.pack_forget()
+        self.settings["show_info"] = show
+        save_settings(self.settings)
+
+    def show_meta(self, meta):
+        t = self.meta_text
+        t.config(state="normal")
+        t.delete("1.0", "end")
+        t.insert("end", "Photo details\n", "head")
+        folder = os.path.dirname(os.path.relpath(self.current_path, self.src))
+        rows = list(meta)
+        rows.insert(1 if rows and rows[0][0] == "Date taken" else 0, ("Folder", folder or "(top folder)"))
+        for label, value in rows:
+            t.insert("end", label.upper() + "\n", "label")
+            t.insert("end", str(value) + "\n", "value")
+        t.insert("end", "Press I to hide or show this panel", "hint")
+        t.config(state="disabled")
 
     def prefetch(self, path):
         if path not in self.cache:
@@ -425,7 +554,8 @@ class PhotoSorter:
                                     text="Loading…", fill=MUTED, font=("Segoe UI", 14))
             self.root.after(30, lambda: self.wait_for_image(path))
             return
-        self.current_img, self.current_info = fut.result()
+        self.current_img, self.current_info, meta = fut.result()
+        self.show_meta(meta)
         self.render()
 
     def render(self):
