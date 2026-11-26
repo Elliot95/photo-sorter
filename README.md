@@ -12,7 +12,7 @@ Close it whenever you like. Next time you open the same folder, it picks up wher
 
 ## ⬇️ Download (Windows)
 
-### **[Download PhotoSorter.exe](../../releases/latest/download/PhotoSorter.exe)**
+### **[Download PhotoSorter.exe](https://github.com/Elliot95/photo-sorter/releases/latest/download/PhotoSorter.exe)**
 
 That's it: no installing. Put the file wherever you like (Desktop, Documents…) and double-click it.
 
