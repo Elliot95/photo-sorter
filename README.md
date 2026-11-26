@@ -12,7 +12,9 @@ Close it whenever you like. Next time you open the same folder, it picks up wher
 
 ## Download and set up (Windows, one time only)
 
-1. **Get Python:** open the Microsoft Store, search **Python 3.13** and install it.
+1. **Get Python (free):** go to **[python.org/downloads](https://www.python.org/downloads/)** and click the yellow **Download Python** button. Run the file you downloaded.
+   - ⚠️ On the first install screen, **tick "Add python.exe to PATH"** before clicking *Install Now*.
+   - Or install it from the Microsoft Store: open the **Store** app, search **Python**, and install the newest version from the *Python Software Foundation*.
 2. **Download this app:** on this page, click the green **Code** button, then **Download ZIP**.
 3. **Unzip it** wherever you like, e.g. `Documents\PhotoSorter`. Right-click the ZIP, then **Extract All…**.
 4. Inside the unzipped folder, double-click **`Install.bat`**. Wait until it says *All set*.
