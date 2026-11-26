@@ -24,7 +24,7 @@ It takes a few seconds to open.
 
 ## Using it
 
-Double-click **`PhotoSorter.exe`**. The window has three tabs along the top: **Sort**, **Shortcuts** and **How to use**. Press **F1** to jump to the shortcuts at any time, and **Esc** to get back to sorting. On the **Sort** tab:
+Double-click **`PhotoSorter.exe`**. The window has four tabs along the top: **Sort**, **Shortcuts**, **How to use** and **Notes** (the small print). Press **F1** to jump to the shortcuts at any time, and **Esc** to get back to sorting. On the **Sort** tab:
 
 1. **Browse** to the top folder of your photos. Every folder inside it is searched, however deeply nested.
 2. Choose where the sorted folders should go. It suggests `<your folder> - Sorted`.
@@ -110,6 +110,51 @@ No videos in your folder? Nothing changes. It works just like before.
 - **How it remembers where you got to:** the sorted folder has a file called `.photo_sorter_log.jsonl` (don't delete it). It's a running record with one line per decision: which original file, which folder it went to, and where the copy was saved (plus a line when you press Undo). When you reopen a folder, any file whose original location is in that record is skipped. If you move or rename the originals, they'll come up again.
 - Sorted a folder with an older version? Opening it again tidies your earlier folders into `Photos\` automatically, and adds any Live Photo clips that were missed.
 - Folders whose names start with a dot (like `.thumbnails`) are skipped.
+
+---
+
+## 📝 Notes & caveats
+
+The small print. It's also on the **Notes** tab in the app.
+
+**Space and safety**
+- Everything is copied, so you need free disk space roughly equal to what you're sorting. There's no space check up front. If the disk fills up you get an error, and that photo stays where it was.
+- The app never deletes anything, including the `Delete` folder. Clearing that out, and the originals, is up to you.
+- **OneDrive / cloud folders:** "online only" files are downloaded as you view and copy them, so a big sort can be slow and use a lot of data. Right-click the folder and choose **Always keep on this device** first if you can.
+- Don't run two copies of the app on the same folder at the same time.
+
+**Progress and undo**
+- Progress lives in `.photo_sorter_log.jsonl` in the sorted folder. Delete it and the app forgets what you've done.
+- Originals are recognised by where they are. Move or rename the original folder (or a file in it) and those photos come up again.
+- **Undo** only goes back through what you've done since opening the folder this time. To fix something from an earlier sitting, move or delete the copy yourself.
+- **Skip** (Space) only skips for now. Skipped photos come back next time.
+- Moved the sorted folder? **Pick up where you left off** still points at the old place. Use **Open a progress file…** and pick the one in its new place instead.
+
+**Pairs, Live Photos and edits**
+- RAW+JPEG pairs and Live Photos are only matched when both files are **in the same folder with the same name** (`IMG_0042.JPG` + `IMG_0042.CR2`). If your camera saved them to separate folders, they come up as two items.
+- Android motion photos keep their clip inside the photo. The photo is copied whole, but **P** can't play the clip.
+- Previews show the photo as shot. Edits saved in `.xmp` (Lightroom / Bridge) or `.aae` (iPhone) are copied along with it but don't show in the preview.
+- RAW previews use the JPEG the camera stores inside the RAW, so they look like the camera's screen, not a full edit.
+- Duplicate photos (the same picture in two folders) aren't detected. Each one comes up.
+
+**Videos**
+- Videos show one still frame. **P** plays them in your normal video player. If Windows can't play that type, you'll need a player like VLC.
+- A few unusual video types may show no preview. They can still be sorted.
+
+**Folders and names**
+- Keys `1`–`9` only reach your first 9 `Keep` folders (A–Z). Any more are click-only.
+- **Straight into my own folders** mode allows up to 9 folders.
+- Photos and videos share folder names, so making `Holiday` for a video also offers it for photos.
+- Renaming only changes the copy's file name. The date, camera details and other info inside the file are untouched.
+- Typed names lose characters Windows doesn't allow (`\ / : * ? " < > |`) and are cut to 180 characters. The same name twice becomes `(1)`.
+- **By date taken** uses the camera's clock with no time-zone change. If the camera's clock was wrong, the names will be too. Photos with no date keep their original name.
+- Folders starting with a dot and system files (`Thumbs.db`, `desktop.ini`) are skipped. Every other skipped file is listed in `Skipped files.csv`.
+
+**The .exe**
+- Windows only. There's no Mac version yet.
+- It takes a few seconds to open because everything it needs is packed inside the one file.
+- Windows SmartScreen, or sometimes an antivirus, may warn about it because it isn't from a big company. Click **More info**, then **Run anyway**.
+- Settings and recent sorts are saved in `.photo_sorter_settings.json` in your user folder.
 
 ---
 

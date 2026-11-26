@@ -68,11 +68,66 @@ JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db", "ehthumbs_
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
 DEFAULT_CATEGORIES = "Friends\nHoliday\nCats\nFamily\nOther"
+
+# Shown on the Notes tab (keep in step with "Notes & caveats" in README.md)
+NOTES = [
+    ("Space and safety", [
+        "Everything is copied, so you need free disk space roughly equal to what you're sorting. "
+        "There's no space check up front. If the disk fills up you get an error, and that photo stays where it was.",
+        "The app never deletes anything, including the Delete folder. Clearing that out, and the originals, is up to you.",
+        "OneDrive / cloud folders: files that are “online only” are downloaded as you view and copy them, "
+        "so a big sort can be slow and use a lot of data. Choose “Always keep on this device” first if you can.",
+        "Don't run two copies of the app on the same folder at the same time.",
+    ]),
+    ("Progress and undo", [
+        "Progress is kept in  .photo_sorter_log.jsonl  in the sorted folder. Delete it and the app forgets what you've done.",
+        "Originals are recognised by where they are. Move or rename the original folder (or a file in it) "
+        "and those photos come up again.",
+        "Undo only goes back through what you've done since opening the folder this time. "
+        "To fix something from an earlier sitting, move or delete the copy yourself.",
+        "Skip (Space) only skips for now. Skipped photos come back next time.",
+        "Moved the sorted folder? “Pick up where you left off” still points at the old place. "
+        "Use Open a progress file… and pick the one in its new place instead.",
+    ]),
+    ("Pairs, Live Photos and edits", [
+        "RAW+JPEG pairs and Live Photos are only matched when both files are in the same folder with the same name "
+        "(IMG_0042.JPG + IMG_0042.CR2). If your camera saved them to separate folders, they come up as two items.",
+        "Android motion photos keep their clip inside the photo. The photo is copied whole, but P can't play the clip.",
+        "Previews show the photo as shot. Edits saved in .xmp (Lightroom / Bridge) or .aae (iPhone) are copied "
+        "along with it but don't show in the preview.",
+        "RAW previews use the JPEG the camera stores inside the RAW, so they look like the camera's screen, not a full edit.",
+        "Duplicate photos (the same picture in two folders) aren't detected. Each one comes up.",
+    ]),
+    ("Videos", [
+        "Videos show one still frame. Press P to watch in your normal video player. "
+        "If Windows can't play that type, you'll need a player like VLC.",
+        "A few unusual video types may show no preview. They can still be sorted.",
+    ]),
+    ("Folders and names", [
+        "Keys 1 to 9 only reach your first 9 Keep folders (A–Z). Any more are click-only.",
+        "“Straight into my own folders” mode allows up to 9 folders.",
+        "Photos and videos share folder names, so making “Holiday” for a video also offers it for photos.",
+        "Renaming only changes the copy's file name. The date, camera details and other info inside the file are untouched.",
+        "Typed names lose characters Windows doesn't allow (\\ / : * ? \" < > |) and are cut to 180 characters. "
+        "Same name twice becomes “(1)”.",
+        "“By date taken” uses the camera's clock with no time-zone change. If the camera's clock was wrong, the names "
+        "will be too. Photos with no date keep their original name.",
+        "Folders starting with a dot (like .thumbnails) and system files (Thumbs.db, desktop.ini) are skipped. "
+        "Every other skipped file is listed in Skipped files.csv.",
+    ]),
+    ("The .exe", [
+        "Windows only. There's no Mac version yet.",
+        "It takes a few seconds to open because everything it needs is packed inside the one file.",
+        "Windows SmartScreen, or sometimes an antivirus, may warn about it because it isn't from a big company. "
+        "Click More info, then Run anyway.",
+        "Settings and your recent sorts are saved in  .photo_sorter_settings.json  in your user folder.",
+    ]),
+]
 
 BG = "#1e1e1e"
 PANEL = "#2b2b2b"
@@ -812,7 +867,7 @@ class PhotoSorter:
         bar = tk.Frame(root, bg="#161616")
         bar.pack(fill="x", side="top")
         self.tab_buttons = {}
-        for key, text in [("sort", "Sort"), ("keys", "Shortcuts"), ("help", "How to use")]:
+        for key, text in [("sort", "Sort"), ("keys", "Shortcuts"), ("help", "How to use"), ("notes", "Notes")]:
             b = tk.Label(bar, text=text, bg="#161616", fg=MUTED, font=("Segoe UI", 11, "bold"),
                          padx=18, pady=9, cursor="hand2")
             b.pack(side="left")
@@ -834,7 +889,8 @@ class PhotoSorter:
         if key == self.tab:
             return
         if key not in self.pages:
-            self.pages[key] = self.build_shortcuts_page() if key == "keys" else self.build_help_page()
+            self.pages[key] = {"keys": self.build_shortcuts_page, "help": self.build_help_page,
+                               "notes": self.build_notes_page}[key]()
         if self.tab:
             self.pages[self.tab].pack_forget()
         self.pages[key].pack(fill="both", expand=True)
@@ -982,6 +1038,22 @@ class PhotoSorter:
             "Rename as you go: press R (or click the Save as box), type a name, Enter. Only the copy is renamed, never "
             "the original. Or choose \u201cBy date taken\u201d on the first screen to name every copy like 2017-01-26 14.30.12.jpg.",
         ])
+        return outer
+
+    def build_notes_page(self):
+        outer, inner = self._page()
+        self.label(inner, "Notes & caveats", 20, True).pack(anchor="w")
+        self.label(inner, "The small print: limits and things worth knowing before a big sort.",
+                   10, color=MUTED).pack(anchor="w", pady=(2, 16))
+        for title, lines in NOTES:
+            c = tk.Frame(inner, bg=PANEL, padx=20, pady=14)
+            c.pack(anchor="w", fill="x", pady=(0, 12))
+            self.label(c, title, 12, True).pack(anchor="w", pady=(0, 6))
+            for line in lines:
+                row = tk.Frame(c, bg=PANEL)
+                row.pack(anchor="w", fill="x", pady=2)
+                self.label(row, "•", 11, True, color="#e0a84c", width=3, anchor="nw").pack(side="left", anchor="n")
+                self.label(row, line, 11, justify="left", wraplength=720, anchor="w").pack(side="left", anchor="w")
         return outer
 
     # ---------------- setup screen
