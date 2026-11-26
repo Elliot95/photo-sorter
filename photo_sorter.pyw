@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -48,7 +49,7 @@ if HEIC_OK:
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "1.6"
+VERSION = "1.7"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -822,6 +823,7 @@ class PhotoSorter:
         self.queue = [p for p in photos if norm(p) not in done]
         self.pos = 0
         self.history = []  # for undo: (pos, src, dest)
+        self.decision_times = []  # when each decision was made, for the time-left estimate
         self.counts = {}
         for c, _ in done.values():
             self.counts[space_of(c)] = self.counts.get(space_of(c), 0) + 1
@@ -844,6 +846,11 @@ class PhotoSorter:
         self.button(top, "Open sorted folder", lambda: os.startfile(self.out), color="#555555", size=9).pack(side="right")
         self.name_lbl = self.label(top, "", 10, color=MUTED)
         self.name_lbl.pack(side="right", padx=16)
+
+        # progress bar right under the top bar
+        self.pbar = tk.Canvas(self.frame, height=8, bg="#3a3a3a", highlightthickness=0)
+        self.pbar.pack(fill="x")
+        self.pbar.bind("<Configure>", lambda e: self.draw_progress())
 
         bottom = tk.Frame(self.frame, bg=PANEL, padx=12, pady=12)
         bottom.pack(side="bottom", fill="x")
@@ -1032,7 +1039,10 @@ class PhotoSorter:
 
         done_now = self.already + self.pos
         pct = 100 * done_now / self.total if self.total else 100
-        self.progress_lbl.config(text=f"{done_now + 1:,} of {self.total:,}   ({pct:.0f}% done)")
+        left = self.time_left()
+        self.progress_lbl.config(text=f"{done_now + 1:,} of {self.total:,}   ({pct:.0f}% done)"
+                                      + (f"   ·   {left}" if left else ""))
+        self.draw_progress()
         rel = os.path.relpath(path, self.src)
         self.name_lbl.config(text=rel)
         self.current_path = path
@@ -1087,6 +1097,32 @@ class PhotoSorter:
             caption = "LIVE PHOTO  ·  press P to play the clip  ·  " + caption
         c.create_text(w // 2, h - 14, text=caption, fill=MUTED, font=("Segoe UI", 10))
 
+    def draw_progress(self):
+        bar = getattr(self, "pbar", None)
+        if not bar or not bar.winfo_exists():
+            return
+        w = bar.winfo_width()
+        frac = (self.already + self.pos) / self.total if self.total else 1
+        bar.delete("all")
+        if frac > 0:
+            bar.create_rectangle(0, 0, max(2, round(w * frac)), 8, fill="#4cc38a", width=0)
+
+    def time_left(self):
+        """Rough estimate from your own recent pace (breaks longer than a minute don't count)."""
+        t = self.decision_times[-40:]
+        if len(t) < 5:
+            return ""
+        gaps = [min(b - a, 60) for a, b in zip(t, t[1:])]
+        per_item = sum(gaps) / len(gaps)
+        remaining = (len(self.queue) - self.pos) * per_item
+        if remaining < 60:
+            return "under a minute left"
+        mins = round(remaining / 60)
+        if mins < 60:
+            return f"about {mins} min left"
+        h, m = divmod(mins, 60)
+        return f"about {h} h {m:02d} min left" if h < 10 else f"about {h} hours left"
+
     def flash(self, cat):
         b = self.cat_buttons.get(cat)
         if b:
@@ -1114,6 +1150,7 @@ class PhotoSorter:
             return
         self.counts[space] = self.counts.get(space, 0) + 1
         self.history.append((self.pos, src, dest, space, extras))
+        self.decision_times.append(time.monotonic())
         self.flash(cat)
         self.pos += 1
         if getattr(self, "picking", False) or (self.mode == "keep" and cat.startswith("Keep" + os.sep)):
