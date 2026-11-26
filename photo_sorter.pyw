@@ -70,7 +70,7 @@ JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db", "ehthumbs_
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "2.3"
+VERSION = "2.3.1"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -2212,11 +2212,16 @@ class PhotoSorter:
         row.pack(anchor="w", pady=(18, 0))
         self.button(row, "Open sorted folder", lambda: os.startfile(self.out), color=GREEN).pack(side="left")
         self.button(row, "↶ Undo last", self.undo, color="#555555").pack(side="left", padx=8)
-        self.button(row, "Back to menu", self.show_setup, color="#555555").pack(side="left")
+        self.button(row, "Back to menu  (Esc)", self.back_to_menu, color="#555555").pack(side="left")
         tidy = self.empty_folders_button(row)
         if tidy:
             tidy.pack(side="left", padx=(8, 0))
-        self.key_handler = lambda e: self.undo() if e.keysym in ("BackSpace", "z") else None
+        def keys(e):
+            if e.keysym in ("BackSpace", "z"):
+                self.undo()
+            elif e.keysym == "Escape":
+                self.back_to_menu()
+        self.key_handler = keys
 
 
 def main():
