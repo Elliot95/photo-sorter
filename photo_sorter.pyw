@@ -4,7 +4,8 @@ Photo Sorter - flick through a folder of photos and sort each one with a click o
 Round 1: Keep / Delete
 Round 2: open the Keep folder and sort into your own folders (Friends, Holiday, Cats...)
 
-Photos are COPIED, never moved or deleted, so the originals are always safe.
+Photos are MOVED (or copied, if you choose) into the sorted folders. Nothing is ever deleted:
+even the Delete folder is just a folder, and Undo puts a photo back where it came from.
 Progress is saved after every photo: close it any time and carry on later.
 """
 
@@ -68,7 +69,7 @@ JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db", "ehthumbs_
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "2.1"
+VERSION = "2.2"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -77,19 +78,28 @@ DEFAULT_CATEGORIES = "Friends\nHoliday\nCats\nFamily\nOther"
 # Shown on the Notes tab (keep in step with "Notes & caveats" in README.md)
 NOTES = [
     ("Space and safety", [
-        "Everything is copied, so you need free disk space roughly equal to what you're sorting. "
+        "Move (the default) takes each photo out of your folder and into the sorted folder, so what's left behind "
+        "is what you haven't sorted yet, plus anything skipped. Empty folders are left in place.",
+        "The app never deletes anything. The Delete folder is just a folder: emptying it is up to you. "
+        "Undo moves the photo back where it came from.",
+        "Moving to the same drive is instant and needs no extra space. Moving to another drive copies the photo, "
+        "checks the copy, then removes the original, so it's slower.",
+        "If a photo can't be moved (for example, it's open in another program), you get an error and the photo and "
+        "its RAW / clip all stay where they were. Nothing is left half-moved.",
+        "Copy leaves your folder untouched, but needs free space roughly equal to what you're sorting. "
         "There's no space check up front. If the disk fills up you get an error, and that photo stays where it was.",
-        "The app never deletes anything, including the Delete folder. Clearing that out, and the originals, is up to you.",
-        "OneDrive / cloud folders: files that are “online only” are downloaded as you view and copy them, "
-        "so a big sort can be slow and use a lot of data. Choose “Always keep on this device” first if you can.",
+        "OneDrive / cloud folders: “online only” files are downloaded as you view them, so a big sort can be slow "
+        "and use a lot of data. Moving photos out of OneDrive also takes them out of OneDrive on your other devices.",
+        "Want a backup before sorting? Copy the whole folder somewhere first, or choose Copy.",
         "Don't run two copies of the app on the same folder at the same time.",
     ]),
     ("Progress and undo", [
         "Progress is kept in  .photo_sorter_log.jsonl  in the sorted folder. Delete it and the app forgets what you've done.",
-        "Originals are recognised by where they are. Move or rename the original folder (or a file in it) "
+        "With Copy, originals are recognised by where they are. Move or rename the original folder (or a file in it) "
         "and those photos come up again.",
         "Undo only goes back through what you've done since opening the folder this time. "
-        "To fix something from an earlier sitting, move or delete the copy yourself.",
+        "To fix something from an earlier sitting, move the file yourself.",
+        "Sorts started before version 2.2 were copies, so Continue keeps them on Copy unless you change it.",
         "Skip (Space) only skips for now. Skipped photos come back next time.",
         "Moved the sorted folder? “Pick up where you left off” still points at the old place. "
         "Use Open a progress file… and pick the one in its new place instead.",
@@ -97,8 +107,8 @@ NOTES = [
     ("Pairs, Live Photos and edits", [
         "RAW+JPEG pairs and Live Photos are only matched when both files are in the same folder with the same name "
         "(IMG_0042.JPG + IMG_0042.CR2). If your camera saved them to separate folders, they come up as two items.",
-        "Android motion photos keep their clip inside the photo. The photo is copied whole, but P can't play the clip.",
-        "Previews show the photo as shot. Edits saved in .xmp (Lightroom / Bridge) or .aae (iPhone) are copied "
+        "Android motion photos keep their clip inside the photo. The photo is kept whole, but P can't play the clip.",
+        "Previews show the photo as shot. Edits saved in .xmp (Lightroom / Bridge) or .aae (iPhone) go "
         "along with it but don't show in the preview.",
         "RAW previews use the JPEG the camera stores inside the RAW, so they look like the camera's screen, not a full edit.",
         "Duplicate photos (the same picture in two folders) aren't detected. Each one comes up.",
@@ -112,7 +122,7 @@ NOTES = [
         "Keys 1 to 9 only reach your first 9 Keep folders (A–Z). Any more are click-only.",
         "“Straight into my own folders” mode allows up to 9 folders.",
         "Photos and videos share folder names, so making “Holiday” for a video also offers it for photos.",
-        "Renaming only changes the copy's file name. The date, camera details and other info inside the file are untouched.",
+        "Renaming only changes the sorted file's name. The date, camera details and other info inside the file are untouched.",
         "Typed names lose characters Windows doesn't allow (\\ / : * ? \" < > |) and are cut to 180 characters. "
         "Same name twice becomes “(1)”.",
         "“By date taken” uses the camera's clock with no time-zone change. If the camera's clock was wrong, the names "
@@ -400,6 +410,24 @@ def clean_filename(name):
                                      *(f"LPT{i}" for i in range(1, 10))}:
         name = "_" + name
     return name[:180]
+
+
+def move_file(src, dest):
+    """Move without ever losing anything. Same drive: a rename. Another drive: copy, check the copy
+    is complete, and only then remove the original (that's what a move between drives is)."""
+    if os.path.exists(dest):
+        raise FileExistsError(dest)
+    try:
+        os.rename(src, dest)
+        return
+    except OSError:
+        if os.path.splitdrive(norm(src))[0] == os.path.splitdrive(norm(dest))[0]:
+            raise  # same drive and it still failed (file in use?) - leave everything as it was
+    shutil.copy2(src, dest)
+    if os.path.getsize(dest) != os.path.getsize(src):
+        os.remove(dest)  # our own incomplete copy - the original is untouched
+        raise OSError("The copy didn't match the original, so the photo was left where it was.")
+    os.remove(src)
 
 
 def unique_dest(folder, filename, also_exts=()):
@@ -945,13 +973,13 @@ class PhotoSorter:
                    10, color=MUTED).pack(anchor="w", pady=(2, 16))
         sections = [
             ("While sorting  (Keep / Delete)", [
-                (["N", "←"], "No: copy to Delete"),
+                (["N", "←"], "No: send to Delete"),
                 (["Y", "→"], "Yes: then choose which Keep folder"),
                 (["1", "–", "9"], "Straight into that Keep folder (skips the question)"),
                 (["P"], "Play a video, or a Live Photo's clip"),
                 (["Space"], "Skip for now (it comes back next time)"),
                 (["Backspace"], "Undo the last one (Z works too)"),
-                (["R"], "Rename the copy (type, then Enter). Its RAW / .xmp / clip get the same name"),
+                (["R"], "Rename it (type, then Enter). Its RAW / .xmp / clip get the same name"),
                 (["I"], "Show or hide the details panel"),
                 (["Esc"], "Back to the menu"),
             ]),
@@ -1010,7 +1038,8 @@ class PhotoSorter:
             "On the Sort tab, click Browse and pick the top folder of your photos. Every folder inside it is "
             "searched, however deeply nested.",
             "The sorted folder fills itself in as “<your folder> - Sorted”, right next to it. Change it if you like.",
-            "Pick Keep / Delete and click Start sorting.",
+            "Choose Move (tidies photos out of your folder) or Copy (leaves it untouched), pick Keep / Delete, "
+            "and click Start sorting.",
             "For each photo press N (no) or Y (yes). After Yes, pick a folder, or press F to make a new one.",
             "Close the window whenever you like. Next time, click Continue under “Pick up where you left off” "
             "(or Open a progress file… to pick one yourself) and it carries on from the same photo.",
@@ -1021,11 +1050,11 @@ class PhotoSorter:
             "iPhone Live Photos count as one item. The short clip goes wherever its photo goes.",
             "When you finish, the summary shows how everything was sorted. Click a folder there to open it.",
         ])
-        card("Your originals are safe", [
-            "Everything is COPIED. Nothing is ever moved or deleted, so your original folder stays exactly as it was.",
-            "The Delete folder is for you to check and then delete yourself, once you're happy.",
-            "Because things are copied, you need free space roughly equal to what you're sorting.",
-            "Undo (Backspace) removes the copy it just made, so mistakes are easy to fix.",
+        card("Nothing is ever deleted", [
+            "Move (the default): each photo leaves your folder for the sorted folder, so whatever is left is still to sort.",
+            "Copy: your folder stays exactly as it was. Needs free space roughly equal to what you're sorting.",
+            "The Delete folder is just a folder. Check it, then delete it yourself once you're happy.",
+            "Undo (Backspace) puts the last photo back where it came from, so mistakes are easy to fix.",
         ])
         card("Good to know", [
             "The file  .photo_sorter_log.jsonl  in the sorted folder is the app's record of every decision. "
@@ -1035,8 +1064,8 @@ class PhotoSorter:
             "and most video types (MP4, MOV, AVI, MKV…). RAW+JPEG pairs count as one photo, and .xmp / .aae edits files go with their photo.",
             "Before sorting starts you see what was found, and anything left out. The full list is saved as Skipped files.csv in the sorted folder.",
             "Press I to hide the details panel if you want a bigger picture.",
-            "Rename as you go: press R (or click the Save as box), type a name, Enter. Only the copy is renamed, never "
-            "the original. Or choose \u201cBy date taken\u201d on the first screen to name every copy like 2017-01-26 14.30.12.jpg.",
+            "Rename as you go: press R (or click the Save as box), type a name, Enter. Or choose \u201cBy date taken\u201d "
+            "on the first screen to name every sorted file like 2017-01-26 14.30.12.jpg. (With Copy, your original keeps its name.)",
         ])
         return outer
 
@@ -1085,7 +1114,7 @@ class PhotoSorter:
         self.build_resume_panel(holder)
 
         self.label(box, "Photo Sorter", 22, True).grid(row=0, column=0, columnspan=3, sticky="w")
-        self.label(box, "Photos are copied, never moved or deleted. Your originals stay safe.",
+        self.label(box, "Nothing is ever deleted. Undo puts a photo back where it came from.",
                    10, color=MUTED).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 16))
 
         # source
@@ -1113,35 +1142,44 @@ class PhotoSorter:
             self.out_var.set(self._auto_out)
         self.src_var.trace_add("write", lambda *a: self.follow_source())
 
-        # mode
-        self.label(box, "3. How to sort").grid(row=7, column=0, columnspan=3, sticky="w", pady=(12, 4))
-        self.mode_var = tk.StringVar(value=s.get("mode", "keep"))
         rb = dict(bg=PANEL, fg=FG, selectcolor=PANEL, activebackground=PANEL,
                   activeforeground=FG, font=("Segoe UI", 10), command=self.update_mode)
+        rb2 = dict(rb, command=None)
+
+        # move or copy
+        self.label(box, "3. Move or copy").grid(row=7, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.action_var = tk.StringVar(value=s.get("action", "move"))
+        tk.Radiobutton(box, text="Move   (photos leave your folder, so what's left is still to sort)", value="move",
+                       variable=self.action_var, **rb2).grid(row=8, column=0, columnspan=3, sticky="w")
+        tk.Radiobutton(box, text="Copy   (your folder stays untouched; needs extra disk space)", value="copy",
+                       variable=self.action_var, **rb2).grid(row=9, column=0, columnspan=3, sticky="w")
+
+        # mode
+        self.label(box, "4. How to sort").grid(row=10, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.mode_var = tk.StringVar(value=s.get("mode", "keep"))
         tk.Radiobutton(box, text="Keep / Delete   (Yes lets you pick or make a folder inside Keep)", value="keep",
-                       variable=self.mode_var, **rb).grid(row=8, column=0, columnspan=3, sticky="w")
+                       variable=self.mode_var, **rb).grid(row=11, column=0, columnspan=3, sticky="w")
         tk.Radiobutton(box, text="Straight into my own folders   (one folder name per line)",
-                       value="cats", variable=self.mode_var, **rb).grid(row=9, column=0, columnspan=3, sticky="w")
-        self.cat_text = tk.Text(box, width=40, height=6, font=("Segoe UI", 10))
+                       value="cats", variable=self.mode_var, **rb).grid(row=12, column=0, columnspan=3, sticky="w")
+        self.cat_text = tk.Text(box, width=40, height=5, font=("Segoe UI", 10))
         self.cat_text.insert("1.0", s.get("categories", DEFAULT_CATEGORIES))
-        self.cat_text.grid(row=10, column=0, columnspan=3, sticky="we", pady=4)
+        self.cat_text.grid(row=13, column=0, columnspan=3, sticky="we", pady=4)
         self.update_mode()
 
-        self.label(box, "4. Name the copies   (you can still rename any photo as you go: press R)").grid(
-            row=11, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.label(box, "5. Name the sorted files   (you can still rename any photo as you go: press R)").grid(
+            row=14, column=0, columnspan=3, sticky="w", pady=(12, 4))
         self.naming_var = tk.StringVar(value=s.get("naming", "original"))
-        rb2 = dict(rb, command=None)
         tk.Radiobutton(box, text="Keep their original names   (IMG_0042.jpg)", value="original",
-                       variable=self.naming_var, **rb2).grid(row=12, column=0, columnspan=3, sticky="w")
+                       variable=self.naming_var, **rb2).grid(row=15, column=0, columnspan=3, sticky="w")
         tk.Radiobutton(box, text="By date taken   (2017-01-26 14.30.12.jpg)", value="date",
-                       variable=self.naming_var, **rb2).grid(row=13, column=0, columnspan=3, sticky="w")
+                       variable=self.naming_var, **rb2).grid(row=16, column=0, columnspan=3, sticky="w")
 
         self.button(box, "Start sorting  ▶", self.start, color=GREEN, size=13).grid(
-            row=14, column=0, columnspan=3, pady=(18, 0), sticky="we")
+            row=17, column=0, columnspan=3, pady=(18, 0), sticky="we")
 
         heic = "" if HEIC_OK else "\n(iPhone .heic photos need Install.bat to be run.)"
         self.label(box, "Tip: close the window whenever you like - it remembers where you got to." + heic,
-                   9, color=MUTED, justify="left").grid(row=15, column=0, columnspan=3, sticky="w", pady=(10, 0))
+                   9, color=MUTED, justify="left").grid(row=18, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
     # ---------------- pick up where you left off
 
@@ -1154,7 +1192,7 @@ class PhotoSorter:
         return out[:5]
 
     def remember_sort(self, total):
-        entry = {"source": self.src, "output": self.out, "mode": self.mode, "naming": self.naming,
+        entry = {"source": self.src, "output": self.out, "mode": self.mode, "naming": self.naming, "action": self.action,
                  "subfolders": self.sub_var.get(), "categories": self.settings.get("categories", ""),
                  "total": total, "used": datetime.now().isoformat(timespec="minutes")}
         rest = [r for r in self.settings.get("recent", [])
@@ -1220,6 +1258,7 @@ class PhotoSorter:
         self.mode_var.set(info.get("mode", "keep"))
         self.sub_var.set(info.get("subfolders", True))
         self.naming_var.set(info.get("naming", "original"))
+        self.action_var.set(info.get("action", "copy"))  # sorts from before v2.2 were all copies
         if info.get("categories"):
             self.cat_text.configure(state="normal")
             self.cat_text.delete("1.0", "end")
@@ -1305,7 +1344,9 @@ class PhotoSorter:
                 return
 
         self.naming = self.naming_var.get()
+        self.action = self.action_var.get()
         self.settings.update(source=src, output=out, mode=mode, subfolders=self.sub_var.get(), naming=self.naming,
+                             action=self.action,
                              categories=self.cat_text.get("1.0", "end").strip())
         save_settings(self.settings)
 
@@ -1346,18 +1387,23 @@ class PhotoSorter:
                             shutil.copy2(extra, target)
                         except Exception:
                             pass
-        self.total = len(photos)
+        queue = [p for p in photos if norm(p) not in done]
+        if self.action == "move":
+            self.already = len(done)
+        else:
+            self.already = len(photos) - len(queue)
+        self.total = self.already + len(queue)
         if photos:
             try:
                 append_log(self.log_path, {"session": {
                     "source": src, "mode": mode, "subfolders": self.sub_var.get(), "naming": self.naming,
+                    "action": self.action,
                     "categories": self.settings.get("categories", ""), "total": len(photos),
                     "started": datetime.now().isoformat(timespec="seconds"), "version": VERSION}})
             except Exception:
                 pass
-            self.remember_sort(len(photos))
-        self.already = sum(1 for p in photos if norm(p) in done)
-        self.queue = [p for p in photos if norm(p) not in done]
+            self.remember_sort(self.total)
+        self.queue = queue
         self.pos = 0
         self.history = []  # for undo: (pos, src, dest)
         self.decision_times = []  # when each decision was made, for the time-left estimate
@@ -1858,19 +1904,32 @@ class PhotoSorter:
         # IMG_1.JPG + IMG_1.CR2 + IMG_1.CR2.xmp -> keep the same endings on the copies
         endings = [os.path.basename(t)[len(stem):] for t in travel]
         extras = []
+        moving = getattr(self, "action", "copy") == "move"
+        done_pairs = []  # (from, to) for each file handled so far, to roll back if something fails
         try:
             os.makedirs(folder, exist_ok=True)
             dest = unique_dest(folder, self.chosen_stem(src) + os.path.splitext(src)[1], endings)
-            shutil.copy2(src, dest)
-            for t, ending in zip(travel, endings):
-                extras.append(os.path.splitext(dest)[0] + ending)
-                shutil.copy2(t, extras[-1])
+            for a, b in [(src, dest)] + [(t, os.path.splitext(dest)[0] + e) for t, e in zip(travel, endings)]:
+                if moving:
+                    move_file(a, b)
+                else:
+                    shutil.copy2(a, b)
+                done_pairs.append((a, b))
+            extras = [b for _, b in done_pairs[1:]]
             append_log(self.log_path, {"src": src, "cat": space, "dest": dest, "extra": extras})
         except Exception as e:
-            messagebox.showerror("Photo Sorter", f"Couldn't copy this file:\n{e}")
+            for a, b in reversed(done_pairs):  # put back what was already moved
+                try:
+                    if moving:
+                        move_file(b, a)
+                    else:
+                        os.remove(b)  # only our own new copy
+                except Exception:
+                    pass
+            messagebox.showerror("Photo Sorter", f"Couldn't {'move' if moving else 'copy'} this file:\n{e}")
             return
         self.counts[space] = self.counts.get(space, 0) + 1
-        self.history.append((self.pos, src, dest, space, extras))
+        self.history.append((self.pos, src, dest, space, extras, list(travel) if moving else None))
         self.decision_times.append(time.monotonic())
         self.flash(cat)
         self.pos += 1
@@ -1882,24 +1941,31 @@ class PhotoSorter:
         if getattr(self, "picking", False):
             self.show_main_buttons()
         if self.pos < len(self.queue):
-            self.history.append((self.pos, None, None, None, []))
+            self.history.append((self.pos, None, None, None, [], None))
             self.pos += 1
             self.show_current()
 
     def undo(self):
         if not self.history:
             return
-        pos, src, dest, cat, extras = self.history.pop()
+        entry = self.history.pop()
+        pos, src, dest, cat, extras, originals = entry
         if src is not None:
             try:
-                for f in [dest] + list(extras):
-                    if f and os.path.exists(f):
-                        os.remove(f)  # only ever removes the COPIES we just made
+                if originals is not None:  # it was moved: put every file back where it came from
+                    for f, back in zip([dest] + list(extras), [src] + list(originals)):
+                        if os.path.exists(f):
+                            os.makedirs(os.path.dirname(back), exist_ok=True)
+                            move_file(f, back)
+                else:
+                    for f in [dest] + list(extras):
+                        if f and os.path.exists(f):
+                            os.remove(f)  # only ever removes the COPIES we just made
                 append_log(self.log_path, {"undo": src})
                 self.counts[cat] -= 1
             except Exception as e:
                 messagebox.showerror("Photo Sorter", f"Couldn't undo:\n{e}")
-                self.history.append((pos, src, dest, cat, extras))
+                self.history.append(entry)
                 return
         self.pos = pos
         if not hasattr(self, "canvas") or not self.canvas.winfo_exists():
