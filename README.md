@@ -10,18 +10,18 @@ Close it whenever you like. Next time you open the same folder, it picks up wher
 
 ---
 
-## Download and set up (Windows, one time only)
+## ⬇️ Download (Windows)
 
-1. **Get Python (free):** go to **[python.org/downloads](https://www.python.org/downloads/)** and click the yellow **Download Python** button. Run the file you downloaded.
-   - ⚠️ On the first install screen, **tick "Add python.exe to PATH"** before clicking *Install Now*.
-   - Or install it from the Microsoft Store: open the **Store** app, search **Python**, and install the newest version from the *Python Software Foundation*.
-2. **Download this app:** on this page, click the green **Code** button, then **Download ZIP**.
-3. **Unzip it** wherever you like, e.g. `Documents\PhotoSorter`. Right-click the ZIP, then **Extract All…**.
-4. Inside the unzipped folder, double-click **`Install.bat`**. Wait until it says *All set*.
+### **[Download PhotoSorter.exe](../../releases/latest/download/PhotoSorter.exe)**
 
-## Every time
+That's it: no installing. Put the file wherever you like (Desktop, Documents…) and double-click it.
 
-Double-click **`Photo Sorter.bat`**. In the window that opens:
+> **"Windows protected your PC"?** This shows up for any app that isn't from a big company.
+> Click **More info**, then **Run anyway**. You only have to do this the first time.
+
+## Using it
+
+Double-click **`PhotoSorter.exe`**. In the window that opens:
 
 1. **Browse** to the folder of photos you want to sort. Subfolders are included.
 2. Choose where the sorted folders should go. It suggests `<your folder> - Sorted`.
@@ -49,3 +49,15 @@ Press `1`–`9` (or click the buttons) to send each photo to that folder.
 - Works with JPG, PNG, HEIC (iPhone), WEBP, GIF, BMP and TIFF. Videos are not shown.
 - Because photos are copied, you need free disk space roughly equal to the photos you're sorting.
 - When you're happy with the result, you can delete the `Delete` folder (and the originals) yourself.
+
+---
+
+<details>
+<summary>For tinkerers: run from the source code or build the .exe yourself</summary>
+
+1. Install Python from [python.org/downloads](https://www.python.org/downloads/), ticking **"Add python.exe to PATH"**.
+2. Download this repo (**Code → Download ZIP**) and unzip it.
+3. Run `Install.bat` once, then `Photo Sorter.bat` to start it.
+4. To build `PhotoSorter.exe` yourself, run `Build exe.bat`. The file appears in the `dist` folder.
+
+</details>
