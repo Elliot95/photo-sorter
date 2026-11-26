@@ -8,9 +8,12 @@ Photos are COPIED, never moved or deleted, so the originals are always safe.
 Progress is saved after every photo: close it any time and carry on later.
 """
 
+import io
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -40,6 +43,10 @@ except ImportError:
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp"}
 if HEIC_OK:
     IMAGE_EXTS |= {".heic", ".heif"}
+
+# Videos: shown as a still frame, played in the normal Windows player (needs imageio-ffmpeg)
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
+LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -76,9 +83,32 @@ def norm(path):
     return os.path.normcase(os.path.abspath(path))
 
 
+def is_video(path):
+    return os.path.splitext(path)[1].lower() in VIDEO_EXTS
+
+
+def _collect(dirpath, names, found, companions):
+    photos, videos = {}, []
+    for name in names:
+        stem, ext = os.path.splitext(name)
+        if ext.lower() in IMAGE_EXTS:
+            photos.setdefault(stem.lower(), name)
+            found.append(os.path.join(dirpath, name))
+        elif ext.lower() in VIDEO_EXTS:
+            videos.append(name)
+    for name in videos:
+        stem, ext = os.path.splitext(name)
+        if ext.lower() in LIVE_EXTS and stem.lower() in photos:
+            # Live Photo: the clip travels with its photo instead of being sorted on its own
+            companions[norm(os.path.join(dirpath, photos[stem.lower()]))] = os.path.join(dirpath, name)
+        else:
+            found.append(os.path.join(dirpath, name))
+
+
 def find_photos(folder, include_subfolders, skip_folder):
+    """-> (photos and videos to sort, {photo: its Live Photo clip})"""
     skip = norm(skip_folder)
-    found = []
+    found, companions = [], {}
     if include_subfolders:
         for dirpath, dirnames, filenames in os.walk(folder):
             # never scan the output folder if it sits inside the source folder
@@ -86,16 +116,12 @@ def find_photos(folder, include_subfolders, skip_folder):
                 d for d in dirnames
                 if norm(os.path.join(dirpath, d)) != skip and not d.startswith(".")
             ]
-            for name in filenames:
-                if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
-                    found.append(os.path.join(dirpath, name))
+            _collect(dirpath, filenames, found, companions)
     else:
-        for name in os.listdir(folder):
-            full = os.path.join(folder, name)
-            if os.path.isfile(full) and os.path.splitext(name)[1].lower() in IMAGE_EXTS:
-                found.append(full)
+        names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+        _collect(folder, names, found, companions)
     found.sort(key=lambda p: p.lower())
-    return found
+    return found, companions
 
 
 def read_log(log_path):
@@ -121,14 +147,16 @@ def append_log(log_path, rec):
         f.write(json.dumps(rec) + "\n")
 
 
-def unique_dest(folder, filename):
+def unique_dest(folder, filename, also_exts=()):
+    """A free name in folder (also free for a Live Photo clip with the same name)."""
     base, ext = os.path.splitext(filename)
-    dest = os.path.join(folder, filename)
-    n = 1
-    while os.path.exists(dest):
-        dest = os.path.join(folder, f"{base} ({n}){ext}")
+    n = 0
+    while True:
+        stem = base if n == 0 else f"{base} ({n})"
+        if not os.path.exists(os.path.join(folder, stem + ext)) and not any(
+                os.path.exists(os.path.join(folder, stem + e)) for e in also_exts):
+            return os.path.join(folder, stem + ext)
         n += 1
-    return dest
 
 
 def _num(v):
@@ -152,8 +180,10 @@ def _gps(gps):
         d, m, s = (_num(x) for x in vals)
         val = d + m / 60 + s / 3600
         return -val if ref in ("S", "W") else val
-    lat = deg(gps[2], _clean(gps.get(1, "N")))
-    lon = deg(gps[4], _clean(gps.get(3, "E")))
+    return fmt_latlon(deg(gps[2], _clean(gps.get(1, "N"))), deg(gps[4], _clean(gps.get(3, "E"))))
+
+
+def fmt_latlon(lat, lon):
     return f"{abs(lat):.5f}° {'S' if lat < 0 else 'N'}, {abs(lon):.5f}° {'W' if lon < 0 else 'E'}"
 
 
@@ -229,9 +259,135 @@ def read_metadata(path, img):
     return meta, caption
 
 
+# ---------------------------------------------------------------- videos
+
+_FFMPEG = None
+
+
+def ffmpeg_exe():
+    global _FFMPEG
+    if _FFMPEG is None:
+        try:
+            import imageio_ffmpeg
+            _FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            _FFMPEG = ""
+    return _FFMPEG
+
+
+def _run(args):
+    flags = 0x08000000 if os.name == "nt" else 0  # no black console window popping up
+    return subprocess.run(args, capture_output=True, timeout=60, creationflags=flags)
+
+
+def video_info(path):
+    """Read a video's details from ffmpeg's description of it (iPhone, Android, cameras)."""
+    info = {}
+    exe = ffmpeg_exe()
+    if not exe:
+        return info
+    try:
+        text = _run([exe, "-hide_banner", "-i", path]).stderr.decode("utf-8", "ignore")
+    except Exception:
+        return info
+    m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    if m:
+        info["duration"] = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
+    m = re.search(r"Video: (\w+).*?, (\d{2,5})x(\d{2,5})", text)
+    if m:
+        info["codec"], info["w"], info["h"] = m[1], int(m[2]), int(m[3])
+        r = re.search(r"rotation of (-?\d+)", text) or re.search(r"rotate\s*:\s*(-?\d+)", text)
+        if r and abs(int(float(r[1]))) % 180 == 90:
+            info["w"], info["h"] = info["h"], info["w"]
+    m = re.search(r"(\d+(?:\.\d+)?) fps", text)
+    if m:
+        info["fps"] = float(m[1])
+    for key, pattern in [("date", r"com\.apple\.quicktime\.creationdate\s*:\s*(\S+)"),
+                         ("date", r"creation_time\s*:\s*(\S+)"),
+                         ("make", r"com\.apple\.quicktime\.make\s*:\s*(.+)"),
+                         ("make", r"com\.android\.manufacturer\s*:\s*(.+)"),
+                         ("make", r"^\s*make\s*:\s*(.+)"),
+                         ("model", r"com\.apple\.quicktime\.model\s*:\s*(.+)"),
+                         ("model", r"com\.android\.model\s*:\s*(.+)"),
+                         ("model", r"^\s*model\s*:\s*(.+)"),
+                         ("software", r"com\.apple\.quicktime\.software\s*:\s*(.+)"),
+                         ("software", r"com\.android\.version\s*:\s*(.+)")]:
+        m = re.search(pattern, text, re.I | re.M)
+        if m and key not in info:
+            info[key] = m[1].strip()
+    if info.get("software", "").replace(".", "").isdigit():  # bare version number
+        android = re.search(r"com\.android\.version", text, re.I)
+        info["software"] = ("Android " if android else "iOS " if "apple" in info.get("make", "").lower() else "") + info["software"]
+    m = re.search(r"location(?:\.ISO6709)?(?:-eng)?\s*:\s*([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)", text, re.I)
+    if m:
+        info["location"] = fmt_latlon(float(m[1]), float(m[2]))
+    return info
+
+
+def video_frame(path, duration):
+    """Grab one still frame (about 1 second in) as a PIL image."""
+    exe = ffmpeg_exe()
+    if not exe:
+        return None
+    for at in ([min(1.0, duration / 3)] if duration else [1.0]) + [0]:
+        try:
+            data = _run([exe, "-v", "error", "-ss", f"{at:.2f}", "-i", path, "-frames:v", "1",
+                         "-vf", "scale='min(1920,iw)':-2", "-f", "image2pipe", "-vcodec", "png", "-"]).stdout
+            if data:
+                return Image.open(io.BytesIO(data)).convert("RGB")
+        except Exception:
+            pass
+    return None
+
+
+def load_video_preview(path, max_w, max_h):
+    info = video_info(path)
+    st = os.stat(path)
+    caption = ""
+    if info.get("date"):
+        try:
+            caption = datetime.strptime(info["date"][:19], "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y, %H:%M")
+        except Exception:
+            caption = info["date"]
+    meta = [("Date taken", caption or "Unknown - file date " +
+             datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y"))]
+    if not caption:
+        caption = datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y (file date)")
+    size = st.st_size
+    meta += [("File", os.path.basename(path)),
+             ("Type", f"Video ({os.path.splitext(path)[1][1:].upper()})"),
+             ("Size", f"{size / 1048576:.1f} MB" if size >= 1048576 else f"{size / 1024:.0f} KB")]
+    if "duration" in info:
+        d = round(info["duration"])
+        meta.append(("Length", f"{d // 3600}:{d // 60 % 60:02d}:{d % 60:02d}" if d >= 3600 else f"{d // 60}:{d % 60:02d}"))
+    if "w" in info:
+        w, h = info["w"], info["h"]
+        tag = "4K" if max(w, h) >= 3800 else "1080p" if min(w, h) >= 1080 else "720p" if min(w, h) >= 720 else ""
+        fps = f" · {info['fps']:g} fps" if info.get("fps") else ""
+        meta.append(("Dimensions", f"{w:,} × {h:,}" + (f"  ({tag})" if tag else "") + fps))
+    make, model = info.get("make", ""), info.get("model", "")
+    if make or model:
+        meta.append(("Camera", model if make and model.lower().startswith(make.lower()) else f"{make} {model}".strip()))
+    if info.get("location"):
+        meta.append(("Location", info["location"]))
+    if info.get("software"):
+        meta.append(("Software", info["software"]))
+    if not ffmpeg_exe():
+        meta.append(("Preview", "Not available - press P to play it"))
+    img = video_frame(path, info.get("duration"))
+    if img is not None:
+        img.thumbnail((max_w, max_h), Image.LANCZOS)
+    return img, caption, meta
+
+
 def load_preview(path, max_w, max_h):
     """Open an image, read its details, fix its rotation, shrink it to fit the screen.
     Runs in a background thread."""
+    if is_video(path):
+        try:
+            return load_video_preview(path, max_w, max_h)
+        except Exception as e:
+            return None, f"Can't preview this video ({type(e).__name__})", [("File", os.path.basename(path))]
     try:
         img = Image.open(path)
         meta, info = read_metadata(path, img)
@@ -260,6 +416,7 @@ class PhotoSorter:
         self.settings = load_settings()
         self.pool = ThreadPoolExecutor(max_workers=3)
         self.cache = {}  # path -> Future
+        self.companions = {}  # photo -> its Live Photo clip
         self.tk_img = None
 
         root.title("Photo Sorter")
@@ -392,12 +549,12 @@ class PhotoSorter:
         save_settings(self.settings)
 
         self.clear()
-        self.label(self.frame, "Finding photos…", 16).place(relx=0.5, rely=0.5, anchor="center")
+        self.label(self.frame, "Finding photos and videos…", 16).place(relx=0.5, rely=0.5, anchor="center")
         self.root.update()
 
         try:
             os.makedirs(out, exist_ok=True)
-            photos = find_photos(src, self.sub_var.get(), out)
+            photos, self.companions = find_photos(src, self.sub_var.get(), out)
         except Exception as e:
             messagebox.showerror("Photo Sorter", f"Couldn't read the folders:\n{e}")
             self.show_setup()
@@ -416,7 +573,7 @@ class PhotoSorter:
             self.counts[c] = self.counts.get(c, 0) + 1
 
         if not photos:
-            messagebox.showinfo("Photo Sorter", "No photos found in that folder.")
+            messagebox.showinfo("Photo Sorter", "No photos or videos found in that folder.")
             self.show_setup()
             return
         self.show_sorter()
@@ -496,12 +653,16 @@ class PhotoSorter:
                 self.keymap[str(i)] = lambda c=cat: self.choose(c)
 
     def keep_folders(self):
-        keep = os.path.join(self.out, "Keep")
-        try:
-            return sorted((d for d in os.listdir(keep)
-                           if os.path.isdir(os.path.join(keep, d)) and not d.startswith(".")), key=str.lower)
-        except FileNotFoundError:
-            return []
+        """Folders inside Keep - shared by photos (Keep\\x) and videos (Videos\\Keep\\x)."""
+        names = {}
+        for keep in (os.path.join(self.out, "Keep"), os.path.join(self.out, "Videos", "Keep")):
+            try:
+                for d in os.listdir(keep):
+                    if os.path.isdir(os.path.join(keep, d)) and not d.startswith("."):
+                        names.setdefault(d.lower(), d)
+            except FileNotFoundError:
+                pass
+        return sorted(names.values(), key=str.lower)
 
     def show_folder_picker(self):
         if self.pos >= len(self.queue):
@@ -547,12 +708,28 @@ class PhotoSorter:
             self.keymap[key]()
         elif key == "i":
             self.toggle_info()
+        elif key == "p":
+            self.play()
         elif key == "space":
             self.skip()
         elif key in ("BackSpace", "z") :
             self.undo()
         elif key == "Escape":
             self.back_to_menu()
+
+    def playable(self):
+        path = getattr(self, "current_path", None)
+        if not path or self.pos >= len(self.queue):
+            return None
+        return path if is_video(path) else self.companions.get(norm(path))
+
+    def play(self):
+        clip = self.playable()
+        if clip:
+            try:
+                os.startfile(clip)  # opens in the normal Windows video player
+            except Exception as e:
+                messagebox.showerror("Photo Sorter", f"Couldn't play this video:\n{e}")
 
     def toggle_info(self):
         show = not self.side.winfo_ismapped()
@@ -567,9 +744,14 @@ class PhotoSorter:
         t = self.meta_text
         t.config(state="normal")
         t.delete("1.0", "end")
-        t.insert("end", "Photo details\n", "head")
+        video = is_video(self.current_path)
+        t.insert("end", ("Video details" if video else "Photo details") + "\n", "head")
         folder = os.path.dirname(os.path.relpath(self.current_path, self.src))
         rows = list(meta)
+        if video:
+            rows.append(("Goes to", "The Videos folder (same folder names as photos)"))
+        elif norm(self.current_path) in self.companions:
+            rows.append(("Live Photo", "Yes - its video clip is kept with it. Press P to play."))
         rows.insert(1 if rows and rows[0][0] == "Date taken" else 0, ("Folder", folder or "(top folder)"))
         for label, value in rows:
             t.insert("end", label.upper() + "\n", "label")
@@ -629,11 +811,27 @@ class PhotoSorter:
                 img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))), Image.BILINEAR)
             self.tk_img = ImageTk.PhotoImage(img)
             c.create_image(w // 2, (h - 20) // 2, image=self.tk_img)
+        elif is_video(self.current_path):
+            c.create_text(w // 2, h // 2 + 90, text="🎬  Video (no preview)", fill=FG, font=("Segoe UI", 16))
         else:
             c.create_text(w // 2, h // 2, text="⚠  " + self.current_info + "\nYou can still sort it.",
                           fill=FG, font=("Segoe UI", 16), justify="center")
             return
-        c.create_text(w // 2, h - 14, text=self.current_info, fill=MUTED, font=("Segoe UI", 10))
+        caption = self.current_info
+        if is_video(self.current_path):
+            # big play button - click it or press P
+            r, cx, cy = 52, w // 2, (h - 20) // 2
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#000000", outline="white", width=3,
+                          stipple="gray50", tags="play")
+            c.create_polygon(cx - 16, cy - 26, cx - 16, cy + 26, cx + 28, cy, fill="white", tags="play")
+            c.tag_bind("play", "<Button-1>", lambda e: self.play())
+            c.tag_bind("play", "<Enter>", lambda e: c.config(cursor="hand2"))
+            c.tag_bind("play", "<Leave>", lambda e: c.config(cursor=""))
+            caption = "VIDEO  ·  press P to play  ·  " + caption
+        elif self.playable():
+            c.create_text(30, 26, text="◉ LIVE", anchor="w", fill="white", font=("Segoe UI", 12, "bold"))
+            caption = "LIVE PHOTO  ·  press P to play the clip  ·  " + caption
+        c.create_text(w // 2, h - 14, text=caption, fill=MUTED, font=("Segoe UI", 10))
 
     def flash(self, cat):
         b = self.cat_buttons.get(cat)
@@ -645,17 +843,23 @@ class PhotoSorter:
         if self.pos >= len(self.queue):
             return
         src = self.queue[self.pos]
-        folder = os.path.join(self.out, cat)
+        space = os.path.join("Videos", cat) if is_video(src) else cat
+        folder = os.path.join(self.out, space)
+        clip = self.companions.get(norm(src))
+        extras = []
         try:
             os.makedirs(folder, exist_ok=True)
-            dest = unique_dest(folder, os.path.basename(src))
+            dest = unique_dest(folder, os.path.basename(src), [os.path.splitext(clip)[1]] if clip else ())
             shutil.copy2(src, dest)
-            append_log(self.log_path, {"src": src, "cat": cat, "dest": dest})
+            if clip:  # Live Photo: copy the clip next to the photo with the matching name
+                extras.append(os.path.splitext(dest)[0] + os.path.splitext(clip)[1])
+                shutil.copy2(clip, extras[0])
+            append_log(self.log_path, {"src": src, "cat": space, "dest": dest, "extra": extras})
         except Exception as e:
-            messagebox.showerror("Photo Sorter", f"Couldn't copy this photo:\n{e}")
+            messagebox.showerror("Photo Sorter", f"Couldn't copy this file:\n{e}")
             return
-        self.counts[cat] = self.counts.get(cat, 0) + 1
-        self.history.append((self.pos, src, dest, cat))
+        self.counts[space] = self.counts.get(space, 0) + 1
+        self.history.append((self.pos, src, dest, space, extras))
         self.flash(cat)
         self.pos += 1
         if getattr(self, "picking", False) or (self.mode == "keep" and cat.startswith("Keep" + os.sep)):
@@ -666,23 +870,24 @@ class PhotoSorter:
         if getattr(self, "picking", False):
             self.show_main_buttons()
         if self.pos < len(self.queue):
-            self.history.append((self.pos, None, None, None))
+            self.history.append((self.pos, None, None, None, []))
             self.pos += 1
             self.show_current()
 
     def undo(self):
         if not self.history:
             return
-        pos, src, dest, cat = self.history.pop()
+        pos, src, dest, cat, extras = self.history.pop()
         if src is not None:
             try:
-                if dest and os.path.exists(dest):
-                    os.remove(dest)  # only ever removes the COPY we just made
+                for f in [dest] + list(extras):
+                    if f and os.path.exists(f):
+                        os.remove(f)  # only ever removes the COPIES we just made
                 append_log(self.log_path, {"undo": src})
                 self.counts[cat] -= 1
             except Exception as e:
                 messagebox.showerror("Photo Sorter", f"Couldn't undo:\n{e}")
-                self.history.append((pos, src, dest, cat))
+                self.history.append((pos, src, dest, cat, extras))
                 return
         self.pos = pos
         if not hasattr(self, "canvas") or not self.canvas.winfo_exists():

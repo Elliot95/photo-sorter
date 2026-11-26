@@ -1,8 +1,8 @@
 # Photo Sorter
 
-Quickly sort thousands of photos one at a time with a click or a key. No Bridge, no faff.
+Quickly sort thousands of photos and videos one at a time with a click or a key. No Bridge, no faff.
 
-- **No** sends a photo to `Delete`.
+- **No** sends it to `Delete`.
 - **Yes** asks which folder inside `Keep` it belongs in (Friends, Holiday, Cats…). You can make a new folder on the spot.
 
 A side panel shows each photo's details: date taken, camera, lens, settings, size and location.
@@ -17,6 +17,7 @@ Close it whenever you like. Next time you open the same folder, it picks up wher
 ### **[Download PhotoSorter.exe](https://github.com/Elliot95/photo-sorter/releases/latest/download/PhotoSorter.exe)**
 
 That's it: no installing. Put the file wherever you like (Desktop, Documents…) and double-click it.
+It takes a few seconds to open.
 
 > **"Windows protected your PC"?** This shows up for any app that isn't from a big company.
 > Click **More info**, then **Run anyway**. You only have to do this the first time.
@@ -25,7 +26,7 @@ That's it: no installing. Put the file wherever you like (Desktop, Documents…)
 
 Double-click **`PhotoSorter.exe`**. In the window that opens:
 
-1. **Browse** to the folder of photos you want to sort. Subfolders are included.
+1. **Browse** to the top folder of your photos. Every folder inside it is searched, however deeply nested.
 2. Choose where the sorted folders should go. It suggests `<your folder> - Sorted`.
 3. Pick how to sort, then click **Start**.
 
@@ -36,9 +37,10 @@ Double-click **`PhotoSorter.exe`**. In the window that opens:
 | `N` or `←` | **No**: copy to `Delete` |
 | `Y` or `→` | **Yes**: choose a folder for it (see below) |
 | `1`–`9` | Skip the question and send it straight to that `Keep` folder |
+| `P` | Play a video (or a Live Photo's clip) |
 | `Space` | Skip for now (it comes back next time) |
 | `Backspace` | Undo the last one |
-| `I` | Show or hide the photo details panel |
+| `I` | Show or hide the details panel |
 | `Esc` | Back to the menu |
 
 **After Yes**, a row of folder buttons appears:
@@ -57,26 +59,44 @@ The folders you make stay there, so they're ready for the next photo and the nex
 Want to skip Keep / Delete? Choose **Straight into my own folders** on the menu and type up to 9 names, one per line.
 Press `1`–`9` (or click the buttons) to send each photo to that folder.
 
----|---|
-| `Y` or `→` | **Yes**: copy to `Keep` |
-| `N` or `←` | **No**: copy to `Delete` |
-| `Space` | Skip for now (it comes back next time) |
-| `Backspace` | Undo the last one |
-| `I` | Show or hide the photo details panel |
-| `Esc` | Back to the menu |
+---
 
-### Round 2: your own folders
+## Videos 🎬
 
-Back at the menu, **Browse** to the `Keep` folder. Choose **Into my own folders** and type up to 9 names, one per line.
-Press `1`–`9` (or click the buttons) to send each photo to that folder.
+Videos from any phone or camera (iPhone, Android, GoPro, Canon…) come up in the same queue as photos.
+
+- You see a still from the video with a ▶ button. Press **P** or click ▶ to watch it in your normal video player, then close the player and press Yes / No.
+- The details panel shows the length, resolution, date, camera and location.
+- Videos go into their **own space** so they don't get mixed in with photos, but the **folder names are shared**:
+
+```
+My Photos - Sorted\
+├── Keep\
+│   ├── Holiday\        ← holiday photos
+│   └── Cats\
+├── Delete\
+└── Videos\
+    ├── Keep\
+    │   ├── Holiday\    ← holiday videos
+    │   └── Cats\
+    └── Delete\
+```
+
+**iPhone Live Photos** (a photo plus a short clip with the same name) count as **one** item. You see the photo with a **◉ LIVE** badge, **P** plays the clip, and wherever the photo goes, its clip goes too.
+Android motion photos keep their clip inside the photo file, so they already count as one.
+
+No videos in your folder? Nothing changes. It works just like before.
 
 ---
 
 ## Good to know
 
-- Works with JPG, PNG, HEIC (iPhone), WEBP, GIF, BMP and TIFF. Videos are not shown.
-- Because photos are copied, you need free disk space roughly equal to the photos you're sorting.
-- When you're happy with the result, you can delete the `Delete` folder (and the originals) yourself.
+- **Photos:** JPG, PNG, HEIC (iPhone), WEBP, GIF, BMP, TIFF.
+  **Videos:** MP4, MOV, M4V, AVI, MKV, WMV, 3GP, MTS/M2TS, WEBM, MPG.
+- **The `Delete` folder is for you to delete yourself.** The app never deletes anything. `Delete` just holds copies of everything you said No to, so you can check them before throwing them away. Once you're happy with the sort, you can delete the `Delete` folder (and the original folder, since everything you wanted is now copied into `Keep`).
+- Because files are copied, you need free disk space roughly equal to what you're sorting.
+- Files with the same name from different folders don't overwrite each other: the second becomes `IMG_0001 (1).jpg`.
+- Folders whose names start with a dot (like `.thumbnails`) are skipped.
 
 ---
 
