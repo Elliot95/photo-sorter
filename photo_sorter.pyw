@@ -68,7 +68,7 @@ JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db", "ehthumbs_
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "1.9"
+VERSION = "2.0"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -338,6 +338,15 @@ def move_into_photos(out, done):
         shutil.rmtree(old, ignore_errors=True)
 
 
+def clean_filename(name):
+    """Make typed text safe as a Windows file name (no \\ / : * ? " < > |, no trailing dots/spaces)."""
+    name = "".join(c for c in name if c not in '<>:"/\\|?*' and ord(c) >= 32).strip().rstrip(". ")
+    if name.upper().split(".")[0] in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                                     *(f"LPT{i}" for i in range(1, 10))}:
+        name = "_" + name
+    return name[:180]
+
+
 def unique_dest(folder, filename, also_exts=()):
     """A free name in folder (also free for a Live Photo clip with the same name)."""
     base, ext = os.path.splitext(filename)
@@ -402,7 +411,9 @@ def read_metadata(path, img):
     taken = ex.get(36867) or exif.get(306)
     if taken:
         try:
-            caption = datetime.strptime(_clean(taken)[:19], "%Y:%m:%d %H:%M:%S").strftime("%d %b %Y, %H:%M")
+            when = datetime.strptime(_clean(taken)[:19], "%Y:%m:%d %H:%M:%S")
+            caption = when.strftime("%d %b %Y, %H:%M")
+            meta.append(("_taken", when.isoformat()))
         except Exception:
             caption = _clean(taken)
         meta.insert(0, ("Date taken", caption))
@@ -537,11 +548,16 @@ def load_video_preview(path, max_w, max_h):
     caption = ""
     if info.get("date"):
         try:
-            caption = datetime.strptime(info["date"][:19], "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y, %H:%M")
+            when = datetime.strptime(info["date"][:19], "%Y-%m-%dT%H:%M:%S")
+            caption = when.strftime("%d %b %Y, %H:%M")
         except Exception:
-            caption = info["date"]
+            when, caption = None, info["date"]
+    else:
+        when = None
     meta = [("Date taken", caption or "Unknown - file date " +
              datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y"))]
+    if when:
+        meta.append(("_taken", when.isoformat()))
     if not caption:
         caption = datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y (file date)")
     size = st.st_size
@@ -655,7 +671,9 @@ def raw_metadata(path, w=None, h=None):
     taken = d.get("date")
     if taken:
         try:
-            caption = datetime.strptime(_clean(taken)[:19], "%Y:%m:%d %H:%M:%S").strftime("%d %b %Y, %H:%M")
+            when = datetime.strptime(_clean(taken)[:19], "%Y:%m:%d %H:%M:%S")
+            caption = when.strftime("%d %b %Y, %H:%M")
+            meta.append(("_taken", when.isoformat()))
         except Exception:
             caption = _clean(taken)
         meta.append(("Date taken", caption))
@@ -877,6 +895,7 @@ class PhotoSorter:
                 (["P"], "Play a video, or a Live Photo's clip"),
                 (["Space"], "Skip for now (it comes back next time)"),
                 (["Backspace"], "Undo the last one (Z works too)"),
+                (["R"], "Rename the copy (type, then Enter). Its RAW / .xmp / clip get the same name"),
                 (["I"], "Show or hide the details panel"),
                 (["Esc"], "Back to the menu"),
             ]),
@@ -960,6 +979,8 @@ class PhotoSorter:
             "and most video types (MP4, MOV, AVI, MKV…). RAW+JPEG pairs count as one photo, and .xmp / .aae edits files go with their photo.",
             "Before sorting starts you see what was found, and anything left out. The full list is saved as Skipped files.csv in the sorted folder.",
             "Press I to hide the details panel if you want a bigger picture.",
+            "Rename as you go: press R (or click the Save as box), type a name, Enter. Only the copy is renamed, never "
+            "the original. Or choose \u201cBy date taken\u201d on the first screen to name every copy like 2017-01-26 14.30.12.jpg.",
         ])
         return outer
 
@@ -1034,12 +1055,21 @@ class PhotoSorter:
         self.cat_text.grid(row=10, column=0, columnspan=3, sticky="we", pady=4)
         self.update_mode()
 
+        self.label(box, "4. Name the copies   (you can still rename any photo as you go: press R)").grid(
+            row=11, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.naming_var = tk.StringVar(value=s.get("naming", "original"))
+        rb2 = dict(rb, command=None)
+        tk.Radiobutton(box, text="Keep their original names   (IMG_0042.jpg)", value="original",
+                       variable=self.naming_var, **rb2).grid(row=12, column=0, columnspan=3, sticky="w")
+        tk.Radiobutton(box, text="By date taken   (2017-01-26 14.30.12.jpg)", value="date",
+                       variable=self.naming_var, **rb2).grid(row=13, column=0, columnspan=3, sticky="w")
+
         self.button(box, "Start sorting  ▶", self.start, color=GREEN, size=13).grid(
-            row=11, column=0, columnspan=3, pady=(18, 0), sticky="we")
+            row=14, column=0, columnspan=3, pady=(18, 0), sticky="we")
 
         heic = "" if HEIC_OK else "\n(iPhone .heic photos need Install.bat to be run.)"
         self.label(box, "Tip: close the window whenever you like - it remembers where you got to." + heic,
-                   9, color=MUTED, justify="left").grid(row=12, column=0, columnspan=3, sticky="w", pady=(10, 0))
+                   9, color=MUTED, justify="left").grid(row=15, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
     # ---------------- pick up where you left off
 
@@ -1052,7 +1082,7 @@ class PhotoSorter:
         return out[:5]
 
     def remember_sort(self, total):
-        entry = {"source": self.src, "output": self.out, "mode": self.mode,
+        entry = {"source": self.src, "output": self.out, "mode": self.mode, "naming": self.naming,
                  "subfolders": self.sub_var.get(), "categories": self.settings.get("categories", ""),
                  "total": total, "used": datetime.now().isoformat(timespec="minutes")}
         rest = [r for r in self.settings.get("recent", [])
@@ -1117,6 +1147,7 @@ class PhotoSorter:
             self.out_var.set(info["output"])
         self.mode_var.set(info.get("mode", "keep"))
         self.sub_var.set(info.get("subfolders", True))
+        self.naming_var.set(info.get("naming", "original"))
         if info.get("categories"):
             self.cat_text.configure(state="normal")
             self.cat_text.delete("1.0", "end")
@@ -1201,7 +1232,8 @@ class PhotoSorter:
                 messagebox.showwarning("Photo Sorter", "Up to 9 folders please (one for each number key).")
                 return
 
-        self.settings.update(source=src, output=out, mode=mode, subfolders=self.sub_var.get(),
+        self.naming = self.naming_var.get()
+        self.settings.update(source=src, output=out, mode=mode, subfolders=self.sub_var.get(), naming=self.naming,
                              categories=self.cat_text.get("1.0", "end").strip())
         save_settings(self.settings)
 
@@ -1246,7 +1278,7 @@ class PhotoSorter:
         if photos:
             try:
                 append_log(self.log_path, {"session": {
-                    "source": src, "mode": mode, "subfolders": self.sub_var.get(),
+                    "source": src, "mode": mode, "subfolders": self.sub_var.get(), "naming": self.naming,
                     "categories": self.settings.get("categories", ""), "total": len(photos),
                     "started": datetime.now().isoformat(timespec="seconds"), "version": VERSION}})
             except Exception:
@@ -1382,6 +1414,26 @@ class PhotoSorter:
         # photo details panel on the right (press I to hide/show)
         self.side = tk.Frame(self.frame, bg=PANEL, width=330)
         self.side.pack_propagate(False)
+
+        nb = tk.Frame(self.side, bg=PANEL, padx=16, pady=12)
+        nb.pack(fill="x")
+        self.label(nb, "SAVE AS", 9, color=MUTED).pack(anchor="w")
+        row = tk.Frame(nb, bg=PANEL)
+        row.pack(fill="x", pady=(2, 0))
+        self.name_var = tk.StringVar()
+        self.name_entry = tk.Entry(row, textvariable=self.name_var, font=("Segoe UI", 11), bg="#3a3a3a", fg=FG,
+                                   insertbackground=FG, relief="flat", highlightthickness=1,
+                                   highlightbackground="#3a3a3a", highlightcolor="#4cc38a")
+        self.name_entry.pack(side="left", fill="x", expand=True, ipady=4)
+        self.ext_lbl = self.label(row, "", 11, color=MUTED)
+        self.ext_lbl.pack(side="left", padx=(4, 0))
+        self.name_hint = self.label(nb, "R to rename  ·  Enter to keep it  ·  Esc to undo", 8, color=MUTED)
+        self.name_hint.pack(anchor="w", pady=(3, 0))
+        self.name_entry.bind("<Return>", lambda e: self.root.focus_set())
+        self.name_entry.bind("<KP_Enter>", lambda e: self.root.focus_set())
+        self.name_entry.bind("<Escape>", lambda e: self.reset_name(focus_back=True))
+        self.name_entry.bind("<KeyRelease>", lambda e: self._name_typed(e))
+        self.name_edited = False
         self.meta_text = tk.Text(self.side, bg=PANEL, fg=FG, relief="flat", wrap="word",
                                  font=("Segoe UI", 10), padx=16, pady=14, cursor="arrow",
                                  takefocus=0, highlightthickness=0, borderwidth=0)
@@ -1495,6 +1547,8 @@ class PhotoSorter:
             self.toggle_info()
         elif key == "p":
             self.play()
+        elif key == "r":
+            self.rename_now()
         elif key == "space":
             self.skip()
         elif key in ("BackSpace", "z") :
@@ -1527,6 +1581,58 @@ class PhotoSorter:
         self.settings["show_info"] = show
         save_settings(self.settings)
 
+    # ---------------- renaming
+
+    def suggested_stem(self, path, meta=None):
+        """The name a copy gets unless you type your own."""
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if getattr(self, "naming", "original") == "date" and meta:
+            taken = dict(meta).get("_taken")
+            if taken:
+                try:
+                    return datetime.fromisoformat(taken).strftime("%Y-%m-%d %H.%M.%S")
+                except Exception:
+                    pass
+        return stem
+
+    def reset_name(self, focus_back=False, meta=None):
+        path = getattr(self, "current_path", None)
+        if not path or not hasattr(self, "name_var"):
+            return
+        if meta is None:
+            fut = self.cache.get(path)
+            meta = fut.result()[2] if fut and fut.done() else None
+        self.name_var.set(self.suggested_stem(path, meta))
+        self.ext_lbl.config(text=os.path.splitext(path)[1])
+        self.name_edited = False
+        if focus_back:
+            self.root.focus_set()
+
+    def _name_typed(self, e):
+        if e.keysym not in ("Return", "KP_Enter", "Escape", "Tab", "Shift_L", "Shift_R", "Control_L",
+                            "Control_R", "Left", "Right", "Home", "End"):
+            self.name_edited = True
+
+    def rename_now(self):
+        if not self.side.winfo_ismapped():
+            self.toggle_info()
+        self.name_entry.focus_set()
+        self.name_entry.select_range(0, "end")
+        self.name_entry.icursor("end")
+
+    def chosen_stem(self, src):
+        """Typed name if you changed it, otherwise the automatic one."""
+        if src == getattr(self, "current_path", None) and self.name_edited:
+            typed = clean_filename(self.name_var.get())
+            if typed:
+                return typed
+        meta = None
+        try:
+            meta = self.prefetch(src).result(timeout=15)[2]  # date-taken naming needs the details
+        except Exception:
+            pass
+        return clean_filename(self.suggested_stem(src, meta)) or os.path.splitext(os.path.basename(src))[0]
+
     def show_meta(self, meta):
         t = self.meta_text
         t.config(state="normal")
@@ -1547,6 +1653,8 @@ class PhotoSorter:
                 rows.append(("Edits file", f"{name} goes with it"))
         rows.insert(1 if rows and rows[0][0] == "Date taken" else 0, ("Folder", folder or "(top folder)"))
         for label, value in rows:
+            if label.startswith("_"):
+                continue  # hidden values used behind the scenes (e.g. the exact date for naming)
             t.insert("end", label.upper() + "\n", "label")
             t.insert("end", str(value) + "\n", "value")
         t.insert("end", "Press I to hide or show this panel", "hint")
@@ -1578,6 +1686,10 @@ class PhotoSorter:
         rel = os.path.relpath(path, self.src)
         self.name_lbl.config(text=rel)
         self.current_path = path
+        self.name_edited = False
+        self.reset_name(meta=None)
+        if self.root.focus_get() is self.name_entry:
+            self.root.focus_set()
         self.wait_for_image(path)
 
     def wait_for_image(self, path):
@@ -1591,6 +1703,8 @@ class PhotoSorter:
             self.root.after(30, lambda: self.wait_for_image(path))
             return
         self.current_img, self.current_info, meta = fut.result()
+        if not self.name_edited:
+            self.reset_name(meta=meta)
         self.show_meta(meta)
         self.render()
 
@@ -1674,7 +1788,7 @@ class PhotoSorter:
         extras = []
         try:
             os.makedirs(folder, exist_ok=True)
-            dest = unique_dest(folder, os.path.basename(src), endings)
+            dest = unique_dest(folder, self.chosen_stem(src) + os.path.splitext(src)[1], endings)
             shutil.copy2(src, dest)
             for t, ending in zip(travel, endings):
                 extras.append(os.path.splitext(dest)[0] + ending)

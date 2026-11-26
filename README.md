@@ -40,6 +40,7 @@ Double-click **`PhotoSorter.exe`**. The window has three tabs along the top: **S
 | `P` | Play a video (or a Live Photo's clip) |
 | `Space` | Skip for now (it comes back next time) |
 | `Backspace` | Undo the last one |
+| `R` | Rename the copy: type a name, then `Enter` (`Esc` undoes) |
 | `I` | Show or hide the details panel |
 | `Esc` | Back to the menu |
 
@@ -53,6 +54,12 @@ Double-click **`PhotoSorter.exe`**. The window has three tabs along the top: **S
 | `Esc` | Cancel, back to Yes / No |
 
 The folders you make stay there, so they're ready for the next photo and the next time you open the app.
+
+### Renaming the copies
+
+The **Save as** box at the top of the details panel shows the name each copy will get. Press **R** (or click it), type a new name, and press **Enter**. Then sort as normal. Any RAW, `.xmp` or Live Photo clip that goes with the photo gets the same new name. Only the copy is renamed, never your original.
+
+On the first screen you can also choose to name every copy **by date taken**, e.g. `2017-01-26 14.30.12.jpg`. Photos with no date keep their own name, and two taken in the same second become `… (1).jpg`.
 
 ### Straight into your own folders
 
