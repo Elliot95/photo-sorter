@@ -97,7 +97,7 @@ No videos in your folder? Nothing changes. It works just like before.
 - **The `Delete` folder is for you to delete yourself.** The app never deletes anything. `Delete` just holds copies of everything you said No to, so you can check them before throwing them away. Once you're happy with the sort, you can delete the `Delete` folder (and the original folder, since everything you wanted is now copied into `Keep`).
 - Because files are copied, you need free disk space roughly equal to what you're sorting.
 - Files with the same name from different folders don't overwrite each other: the second becomes `IMG_0001 (1).jpg`.
-- **How it remembers where you got to:** the sorted folder has a hidden file, `.photo_sorter_log.jsonl`. It's a running record with one line per decision: which original file, which folder it went to, and where the copy was saved (plus a line when you press Undo). When you reopen a folder, any file whose original location is in that record is skipped. If you move or rename the originals, they'll come up again.
+- **How it remembers where you got to:** the sorted folder has a file called `.photo_sorter_log.jsonl` (don't delete it). It's a running record with one line per decision: which original file, which folder it went to, and where the copy was saved (plus a line when you press Undo). When you reopen a folder, any file whose original location is in that record is skipped. If you move or rename the originals, they'll come up again.
 - Sorted a folder with an older version? Opening it again tidies your earlier folders into `Photos\` automatically, and adds any Live Photo clips that were missed.
 - Folders whose names start with a dot (like `.thumbnails`) are skipped.
 

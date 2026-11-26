@@ -143,18 +143,17 @@ def read_log(log_path):
 
 
 def append_log(log_path, rec):
-    new = not os.path.exists(log_path)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
-    if new:
-        hide_file(log_path)
 
 
-def hide_file(path):
-    """Mark a file hidden in Windows Explorer (it's just the app's bookmark)."""
+def unhide_file(path):
+    """v1.4 hid the progress record; keep it visible so people can see what happened."""
     try:
         import ctypes
-        ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x02)
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        if attrs != -1 and attrs & 0x02:
+            ctypes.windll.kernel32.SetFileAttributesW(str(path), attrs & ~0x02)
     except Exception:
         pass
 
@@ -609,7 +608,7 @@ class PhotoSorter:
         except Exception as e:
             messagebox.showwarning("Photo Sorter", f"Couldn't move your earlier sorted photos into the Photos folder:\n{e}")
         if os.path.exists(self.log_path):
-            hide_file(self.log_path)
+            unhide_file(self.log_path)
         # photos sorted before Live Photo support: bring their clips along now
         for key, (c, dest) in done.items():
             clip = self.companions.get(key)
