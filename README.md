@@ -24,7 +24,7 @@ It takes a few seconds to open.
 
 ## Using it
 
-Double-click **`PhotoSorter.exe`**. In the window that opens:
+Double-click **`PhotoSorter.exe`**. The window has three tabs along the top: **Sort**, **Shortcuts** and **How to use**. Press **F1** to jump to the shortcuts at any time, and **Esc** to get back to sorting. On the **Sort** tab:
 
 1. **Browse** to the top folder of your photos. Every folder inside it is searched, however deeply nested.
 2. Choose where the sorted folders should go. It suggests `<your folder> - Sorted`.

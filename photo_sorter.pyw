@@ -48,6 +48,8 @@ if HEIC_OK:
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
+VERSION = "1.6"
+
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
 DEFAULT_CATEGORIES = "Friends\nHoliday\nCats\nFamily\nOther"
@@ -480,16 +482,185 @@ class PhotoSorter:
         self.screen_w = root.winfo_screenwidth()
         self.screen_h = root.winfo_screenheight()
         self.frame = None
+        self.key_handler = None  # what the keyboard does on the Sort tab right now
+
+        # tab bar along the top: Sort / Shortcuts / How to use
+        bar = tk.Frame(root, bg="#161616")
+        bar.pack(fill="x", side="top")
+        self.tab_buttons = {}
+        for key, text in [("sort", "Sort"), ("keys", "Shortcuts"), ("help", "How to use")]:
+            b = tk.Label(bar, text=text, bg="#161616", fg=MUTED, font=("Segoe UI", 11, "bold"),
+                         padx=18, pady=9, cursor="hand2")
+            b.pack(side="left")
+            b.bind("<Button-1>", lambda e, k=key: self.show_tab(k))
+            self.tab_buttons[key] = b
+        tk.Label(bar, text=f"Photo Sorter {VERSION}   ·   F1 for shortcuts", bg="#161616", fg="#6a6a6a",
+                 font=("Segoe UI", 9)).pack(side="right", padx=14)
+        self.content = tk.Frame(root, bg=BG)
+        self.content.pack(fill="both", expand=True)
+        self.pages = {"sort": tk.Frame(self.content, bg=BG)}
+        self.tab = None
+        root.bind("<Key>", self._dispatch_key)
+        self.show_tab("sort")
         self.show_setup()
+
+    # ---------------- tabs
+
+    def show_tab(self, key):
+        if key == self.tab:
+            return
+        if key not in self.pages:
+            self.pages[key] = self.build_shortcuts_page() if key == "keys" else self.build_help_page()
+        if self.tab:
+            self.pages[self.tab].pack_forget()
+        self.pages[key].pack(fill="both", expand=True)
+        self.tab = key
+        for k, b in self.tab_buttons.items():
+            on = k == key
+            b.config(fg=FG if on else MUTED, bg=BG if on else "#161616")
+        self.root.focus_set()
+
+    def _dispatch_key(self, e):
+        if e.keysym == "F1":
+            self.show_tab("help" if self.tab == "keys" else "keys")
+            return
+        if self.tab != "sort":
+            if e.keysym == "Escape":
+                self.show_tab("sort")
+            return  # never sort anything while reading the other tabs
+        if self.key_handler:
+            self.key_handler(e)
+
+    def _page(self):
+        """A scrollable, centred column for the info tabs."""
+        outer = tk.Frame(self.content, bg=BG)
+        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas, bg=BG, padx=40, pady=28)
+        win = canvas.create_window(0, 0, window=inner, anchor="n")
+
+        def layout(e=None):
+            canvas.coords(win, canvas.winfo_width() // 2, 0)
+            canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), inner.winfo_reqheight()))
+        inner.bind("<Configure>", layout)
+        canvas.bind("<Configure>", layout)
+
+        def wheel(e):
+            if self.tab != "sort" and self.pages.get(self.tab) is outer:
+                canvas.yview_scroll(-e.delta // 120, "units")
+        canvas.bind_all("<MouseWheel>", wheel, add="+")
+        return outer, inner
+
+    def _chip(self, parent, key):
+        return tk.Label(parent, text=key, bg="#3d3d3d", fg="white", font=("Consolas", 11, "bold"),
+                        padx=8, pady=2)
+
+    def build_shortcuts_page(self):
+        outer, inner = self._page()
+        self.label(inner, "Keyboard shortcuts", 20, True).pack(anchor="w")
+        self.label(inner, "You can do everything with the mouse too. The keys are just faster.",
+                   10, color=MUTED).pack(anchor="w", pady=(2, 16))
+        sections = [
+            ("While sorting  (Keep / Delete)", [
+                (["N", "←"], "No: copy to Delete"),
+                (["Y", "→"], "Yes: then choose which Keep folder"),
+                (["1", "–", "9"], "Straight into that Keep folder (skips the question)"),
+                (["P"], "Play a video, or a Live Photo's clip"),
+                (["Space"], "Skip for now (it comes back next time)"),
+                (["Backspace"], "Undo the last one (Z works too)"),
+                (["I"], "Show or hide the details panel"),
+                (["Esc"], "Back to the menu"),
+            ]),
+            ("After pressing Yes  (choosing a folder)", [
+                (["Enter"], "Just Keep (no subfolder)"),
+                (["1", "–", "9"], "That folder"),
+                (["F"], "New folder: type a name and the photo goes straight in"),
+                (["Esc"], "Cancel, back to Yes / No"),
+            ]),
+            ("Straight into my own folders  (the other mode)", [
+                (["1", "–", "9"], "Into that folder"),
+                (["Space"], "Skip"),
+                (["Backspace"], "Undo"),
+            ]),
+            ("Anywhere", [
+                (["F1"], "Switch between these help tabs"),
+                (["Esc"], "From a help tab, back to sorting"),
+            ]),
+        ]
+        for title, rows in sections:
+            sec = tk.Frame(inner, bg=PANEL, padx=20, pady=14)
+            sec.pack(anchor="w", fill="x", pady=(0, 12))
+            self.label(sec, title, 12, True).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            for i, (keys, what) in enumerate(rows, 1):
+                kf = tk.Frame(sec, bg=PANEL)
+                kf.grid(row=i, column=0, sticky="w", pady=3, padx=(0, 18))
+                for k in keys:
+                    if k in ("–", "/"):
+                        self.label(kf, k, 10, color=MUTED).pack(side="left", padx=2)
+                    else:
+                        self._chip(kf, k).pack(side="left", padx=(0, 4))
+                self.label(sec, what, 11).grid(row=i, column=1, sticky="w")
+            sec.grid_columnconfigure(0, minsize=170)
+            sec.grid_columnconfigure(1, weight=1)  # keep everything left-aligned in every box
+        return outer
+
+    def build_help_page(self):
+        outer, inner = self._page()
+        self.label(inner, "How to use Photo Sorter", 20, True).pack(anchor="w")
+        self.label(inner, "Flick through your photos one by one and sort each with a key press.",
+                   10, color=MUTED).pack(anchor="w", pady=(2, 16))
+
+        def card(title, lines, numbered=False):
+            c = tk.Frame(inner, bg=PANEL, padx=20, pady=14)
+            c.pack(anchor="w", fill="x", pady=(0, 12))
+            self.label(c, title, 12, True).pack(anchor="w", pady=(0, 6))
+            for i, line in enumerate(lines, 1):
+                row = tk.Frame(c, bg=PANEL)
+                row.pack(anchor="w", fill="x", pady=2)
+                self.label(row, f"{i}." if numbered else "•", 11, True, color="#4cc38a", width=3,
+                           anchor="nw").pack(side="left", anchor="n")
+                self.label(row, line, 11, justify="left", wraplength=720, anchor="w").pack(side="left", anchor="w")
+
+        card("Getting started", [
+            "On the Sort tab, click Browse and pick the top folder of your photos. Every folder inside it is "
+            "searched, however deeply nested.",
+            "The sorted folder fills itself in as “<your folder> - Sorted”, right next to it. Change it if you like.",
+            "Pick Keep / Delete and click Start sorting.",
+            "For each photo press N (no) or Y (yes). After Yes, pick a folder, or press F to make a new one.",
+            "Close the window whenever you like. Open the same folder again and it carries on where you left off.",
+        ], numbered=True)
+        card("What ends up where", [
+            "Photos go in  Photos\\Keep\\…  and  Photos\\Delete.  Videos get their own  Videos\\Keep\\…  "
+            "and  Videos\\Delete,  using the same folder names.",
+            "iPhone Live Photos count as one item. The short clip goes wherever its photo goes.",
+            "When you finish, the summary shows how everything was sorted. Click a folder there to open it.",
+        ])
+        card("Your originals are safe", [
+            "Everything is COPIED. Nothing is ever moved or deleted, so your original folder stays exactly as it was.",
+            "The Delete folder is for you to check and then delete yourself, once you're happy.",
+            "Because things are copied, you need free space roughly equal to what you're sorting.",
+            "Undo (Backspace) removes the copy it just made, so mistakes are easy to fix.",
+        ])
+        card("Good to know", [
+            "The file  .photo_sorter_log.jsonl  in the sorted folder is the app's record of every decision. "
+            "Don't delete it, or the app forgets your progress.",
+            "It recognises photos by where they are. If you move or rename the originals, they'll come up again.",
+            "Works with JPG, PNG, HEIC, WEBP, GIF, BMP, TIFF and most video types (MP4, MOV, AVI, MKV…).",
+            "Press I to hide the details panel if you want a bigger picture.",
+        ])
+        return outer
 
     # ---------------- setup screen
 
     def clear(self):
-        for seq in ("<Key>", "<Configure>"):
-            self.root.unbind(seq)
+        self.root.unbind("<Configure>")
+        self.key_handler = None
         if self.frame is not None:
             self.frame.destroy()
-        self.frame = tk.Frame(self.root, bg=BG)
+        self.frame = tk.Frame(self.pages["sort"], bg=BG)
         self.frame.pack(fill="both", expand=True)
 
     def label(self, parent, text, size=11, bold=False, color=FG, **kw):
@@ -699,7 +870,7 @@ class PhotoSorter:
         self.mid.pack(side="top")
         self.show_main_buttons()
 
-        self.root.bind("<Key>", self.on_key)
+        self.key_handler = self.on_key
         self.canvas.bind("<Configure>", lambda e: self.render())
         self.show_current()
 
@@ -1136,7 +1307,7 @@ class PhotoSorter:
         self.button(row, "Open sorted folder", lambda: os.startfile(self.out), color=GREEN).pack(side="left")
         self.button(row, "↶ Undo last", self.undo, color="#555555").pack(side="left", padx=8)
         self.button(row, "Back to menu", self.show_setup, color="#555555").pack(side="left")
-        self.root.bind("<Key>", lambda e: self.undo() if e.keysym in ("BackSpace", "z") else None)
+        self.key_handler = lambda e: self.undo() if e.keysym in ("BackSpace", "z") else None
 
 
 def main():
