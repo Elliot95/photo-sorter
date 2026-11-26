@@ -8,7 +8,7 @@ Quickly sort thousands of photos and videos one at a time with a click or a key.
 A side panel shows each photo's details: date taken, camera, lens, settings, size and location.
 
 Photos are **copied**, never moved or deleted, so your originals are always safe.
-Close it whenever you like. Next time you open the same folder, it picks up where you left off.
+Close it whenever you like. Next time, click **Continue** under **Pick up where you left off** on the first screen, or **Open a progress file…** to pick the `.photo_sorter_log.jsonl` from any sorted folder.
 
 ---
 

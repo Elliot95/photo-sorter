@@ -49,7 +49,7 @@ if HEIC_OK:
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "1.7"
+VERSION = "1.8"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -149,9 +149,42 @@ def read_log(log_path):
                 continue
             if "undo" in rec:
                 done.pop(norm(rec["undo"]), None)
-            else:
+            elif "src" in rec:
                 done[norm(rec["src"])] = (rec["cat"], rec["dest"])
     return done
+
+
+def read_session(log_path):
+    """What a progress file says about its sort: the settings it was started with
+    (newer files) or a best guess from the files it lists (older files)."""
+    session, srcs, cats = None, [], set()
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if "session" in rec:
+                session = rec["session"]
+            elif "src" in rec:
+                srcs.append(rec["src"])
+                cats.add(rec["cat"])
+    if session:
+        return dict(session), True
+    guess = {"output": os.path.dirname(os.path.abspath(log_path)), "subfolders": True}
+    if srcs:
+        try:
+            guess["source"] = os.path.commonpath([os.path.dirname(x) for x in srcs])
+        except ValueError:
+            guess["source"] = os.path.dirname(srcs[0])
+    plain = {c.split(os.sep)[1] if c.split(os.sep)[0] in ("Photos", "Videos") and len(c.split(os.sep)) > 1
+             else c.split(os.sep)[0] for c in cats}
+    if not plain or plain & {"Keep", "Delete"}:
+        guess["mode"] = "keep"
+    else:
+        guess["mode"] = "cats"
+        guess["categories"] = "\n".join(sorted(plain, key=str.lower))
+    return guess, False
 
 
 def append_log(log_path, rec):
@@ -631,7 +664,8 @@ class PhotoSorter:
             "The sorted folder fills itself in as “<your folder> - Sorted”, right next to it. Change it if you like.",
             "Pick Keep / Delete and click Start sorting.",
             "For each photo press N (no) or Y (yes). After Yes, pick a folder, or press F to make a new one.",
-            "Close the window whenever you like. Open the same folder again and it carries on where you left off.",
+            "Close the window whenever you like. Next time, click Continue under “Pick up where you left off” "
+            "(or Open a progress file… to pick one yourself) and it carries on from the same photo.",
         ], numbered=True)
         card("What ends up where", [
             "Photos go in  Photos\\Keep\\…  and  Photos\\Delete.  Videos get their own  Videos\\Keep\\…  "
@@ -676,8 +710,11 @@ class PhotoSorter:
     def show_setup(self):
         self.clear()
         s = self.settings
-        box = tk.Frame(self.frame, bg=PANEL, padx=30, pady=24)
-        box.place(relx=0.5, rely=0.5, anchor="center")
+        holder = tk.Frame(self.frame, bg=BG)
+        holder.place(relx=0.5, rely=0.5, anchor="center")
+        box = tk.Frame(holder, bg=PANEL, padx=30, pady=24)
+        box.pack(side="left", anchor="n")
+        self.build_resume_panel(holder)
 
         self.label(box, "Photo Sorter", 22, True).grid(row=0, column=0, columnspan=3, sticky="w")
         self.label(box, "Photos are copied, never moved or deleted. Your originals stay safe.",
@@ -728,6 +765,113 @@ class PhotoSorter:
         heic = "" if HEIC_OK else "\n(iPhone .heic photos need Install.bat to be run.)"
         self.label(box, "Tip: close the window whenever you like - it remembers where you got to." + heic,
                    9, color=MUTED, justify="left").grid(row=12, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+    # ---------------- pick up where you left off
+
+    def recent_sorts(self):
+        """Recent sorts whose progress file still exists, newest first."""
+        out = []
+        for r in self.settings.get("recent", []):
+            if os.path.exists(os.path.join(r.get("output", ""), LOG_NAME)):
+                out.append(r)
+        return out[:5]
+
+    def remember_sort(self, total):
+        entry = {"source": self.src, "output": self.out, "mode": self.mode,
+                 "subfolders": self.sub_var.get(), "categories": self.settings.get("categories", ""),
+                 "total": total, "used": datetime.now().isoformat(timespec="minutes")}
+        rest = [r for r in self.settings.get("recent", [])
+                if norm(r.get("output", "")) != norm(self.out)]
+        self.settings["recent"] = [entry] + rest[:9]
+        save_settings(self.settings)
+
+    def forget_sort(self, output):
+        self.settings["recent"] = [r for r in self.settings.get("recent", []) if norm(r.get("output", "")) != norm(output)]
+        save_settings(self.settings)
+        self.show_setup()
+
+    def build_resume_panel(self, holder):
+        panel = tk.Frame(holder, bg=PANEL, padx=24, pady=24, width=420)
+        panel.pack(side="left", anchor="n", padx=(16, 0), fill="y")
+        self.label(panel, "Pick up where you left off", 15, True).pack(anchor="w")
+        self.label(panel, "Your progress is saved after every photo.", 9, color=MUTED).pack(anchor="w", pady=(0, 12))
+        recent = self.recent_sorts()
+        if not recent:
+            self.label(panel, "Nothing to carry on with yet. Sorts you start will show up here.",
+                       10, color=MUTED, wraplength=360, justify="left").pack(anchor="w", pady=(0, 8))
+        for r in recent:
+            done = len(read_log(os.path.join(r["output"], LOG_NAME)))
+            total = max(r.get("total") or 0, done)
+            row = tk.Frame(panel, bg="#363636", padx=14, pady=10)
+            row.pack(fill="x", pady=(0, 8))
+            top = tk.Frame(row, bg="#363636")
+            top.pack(fill="x")
+            tk.Label(top, text=os.path.basename(r["source"].rstrip("\\/")) or r["source"], bg="#363636", fg=FG,
+                     font=("Segoe UI", 12, "bold")).pack(side="left")
+            x = tk.Label(top, text="✕", bg="#363636", fg=MUTED, font=("Segoe UI", 10), cursor="hand2")
+            x.pack(side="right")
+            x.bind("<Button-1>", lambda e, o=r["output"]: self.forget_sort(o))
+            pct = 100 * done / total if total else 0
+            when = ""
+            try:
+                when = "  ·  last used " + datetime.fromisoformat(r["used"]).strftime("%d %b %Y")
+            except Exception:
+                pass
+            tk.Label(row, text=f"{done:,} of {total:,} sorted  ({pct:.0f}%)" + when, bg="#363636",
+                     fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 4))
+            bar = tk.Canvas(row, height=6, width=340, bg="#2a2a2a", highlightthickness=0)
+            bar.pack(anchor="w", fill="x")
+            if pct:
+                bar.create_rectangle(0, 0, max(2, round(340 * pct / 100)), 6, fill="#4cc38a", width=0)
+            tk.Label(row, text="→ " + r["output"], bg="#363636", fg="#7a7a7a", font=("Segoe UI", 8),
+                     wraplength=340, justify="left").pack(anchor="w", pady=(4, 6))
+            if os.path.isdir(r["source"]):
+                self.button(row, "Continue  ▶", lambda r=r: self.continue_sort(r), color=GREEN, size=10).pack(anchor="w")
+            else:
+                tk.Label(row, text="Photo folder not found - is the drive plugged in?", bg="#363636",
+                         fg="#e06c6c", font=("Segoe UI", 9)).pack(anchor="w")
+        self.button(panel, "Open a progress file…", self.open_progress_file, color="#555555", size=10).pack(
+            anchor="w", pady=(8, 0))
+        self.label(panel, "Pick the  .photo_sorter_log.jsonl  inside any sorted folder.", 8,
+                   color=MUTED).pack(anchor="w", pady=(4, 0))
+
+    def fill_form(self, info):
+        if info.get("source"):
+            self.src_var.set(info["source"])
+        if info.get("output"):
+            self.out_var.set(info["output"])
+        self.mode_var.set(info.get("mode", "keep"))
+        self.sub_var.set(info.get("subfolders", True))
+        if info.get("categories"):
+            self.cat_text.configure(state="normal")
+            self.cat_text.delete("1.0", "end")
+            self.cat_text.insert("1.0", info["categories"])
+        self.update_mode()
+
+    def continue_sort(self, entry):
+        self.fill_form(entry)
+        self.start()
+
+    def open_progress_file(self):
+        path = filedialog.askopenfilename(title="Open a Photo Sorter progress file",
+                                          filetypes=[("Photo Sorter progress", "*.jsonl"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            info, exact = read_session(path)
+        except Exception as e:
+            messagebox.showerror("Photo Sorter", f"Couldn't read that file:\n{e}")
+            return
+        info["output"] = os.path.dirname(os.path.abspath(path))
+        self.fill_form(info)
+        src = info.get("source", "")
+        if not src or not os.path.isdir(src):
+            messagebox.showwarning("Photo Sorter", "Found your progress, but not the photo folder it came from"
+                                   + (f":\n{src}" if src else ".") + "\n\nBrowse to the photo folder, then click Start sorting.")
+            return
+        note = "" if exact else "\n\n(This file is from an older version, so the settings are a best guess. Check them first if you like.)"
+        if messagebox.askyesno("Photo Sorter", f"Carry on sorting\n{src}\n\ninto\n{info['output']}?" + note):
+            self.start()
 
     def update_mode(self):
         self.cat_text.configure(state="normal" if self.mode_var.get() == "cats" else "disabled",
@@ -819,6 +963,15 @@ class PhotoSorter:
                     except Exception:
                         pass
         self.total = len(photos)
+        if photos:
+            try:
+                append_log(self.log_path, {"session": {
+                    "source": src, "mode": mode, "subfolders": self.sub_var.get(),
+                    "categories": self.settings.get("categories", ""), "total": len(photos),
+                    "started": datetime.now().isoformat(timespec="seconds"), "version": VERSION}})
+            except Exception:
+                pass
+            self.remember_sort(len(photos))
         self.already = sum(1 for p in photos if norm(p) in done)
         self.queue = [p for p in photos if norm(p) not in done]
         self.pos = 0
