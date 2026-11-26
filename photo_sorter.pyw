@@ -41,15 +41,34 @@ try:  # iPhone photos (.heic) - optional
 except ImportError:
     HEIC_OK = False
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".psd"}
 if HEIC_OK:
-    IMAGE_EXTS |= {".heic", ".heif"}
+    IMAGE_EXTS |= {".heic", ".heif", ".hif"}
+try:
+    from PIL import features as _features
+    if _features.check("avif"):
+        IMAGE_EXTS.add(".avif")
+except Exception:
+    pass
+
+# Camera RAW files: previewed from the JPEG the camera tucks inside them (needs rawpy)
+RAW_EXTS = {".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng", ".orf", ".rw2", ".raf",
+            ".pef", ".srw", ".3fr", ".iiq", ".erf", ".kdc", ".mrw", ".x3f", ".rwl", ".raw", ".mef", ".mos"}
+try:
+    import rawpy
+    RAW_OK = True
+except ImportError:
+    RAW_OK = False
+# Small "edits" files that belong to a photo: Bridge / Lightroom (.xmp), iPhone edits (.aae)
+SIDECAR_EXTS = {".xmp", ".aae"}
+# Windows / Mac housekeeping files - never photos, not worth reporting one by one
+JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db", "ehthumbs_vista.db", "icon\r"}
 
 # Videos: shown as a still frame, played in the normal Windows player (needs imageio-ffmpeg)
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".mts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 LIVE_EXTS = {".mov", ".mp4"}  # iPhone Live Photo clips share a name with their photo
 
-VERSION = "1.8"
+VERSION = "1.9"
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".photo_sorter_settings.json")
 LOG_NAME = ".photo_sorter_log.jsonl"
@@ -99,41 +118,128 @@ def is_video(path):
     return os.path.splitext(path)[1].lower() in VIDEO_EXTS
 
 
-def _collect(dirpath, names, found, companions):
-    photos, videos = {}, []
-    for name in names:
+def is_raw(path):
+    return os.path.splitext(path)[1].lower() in RAW_EXTS
+
+
+def _collect(dirpath, names, found, companions, report):
+    """Sort one folder's files into: things to show, things that travel with them, and things skipped."""
+    groups = {}  # lower-case name stem -> {"photo": [...], "raw": [...], "video": [...], "side": [...]}
+
+    def group(stem):
+        return groups.setdefault(stem.lower(), {"photo": [], "raw": [], "video": [], "side": []})
+
+    for name in sorted(names, key=str.lower):
         stem, ext = os.path.splitext(name)
-        if ext.lower() in IMAGE_EXTS:
-            photos.setdefault(stem.lower(), name)
-            found.append(os.path.join(dirpath, name))
-        elif ext.lower() in VIDEO_EXTS:
-            videos.append(name)
-    for name in videos:
-        stem, ext = os.path.splitext(name)
-        if ext.lower() in LIVE_EXTS and stem.lower() in photos:
-            # Live Photo: the clip travels with its photo instead of being sorted on its own
-            companions[norm(os.path.join(dirpath, photos[stem.lower()]))] = os.path.join(dirpath, name)
+        e = ext.lower()
+        if name.lower() in JUNK_NAMES or name.startswith(".") or name.startswith("~$"):
+            report["junk"] += 1
+        elif e in IMAGE_EXTS:
+            group(stem)["photo"].append(name)
+        elif e in RAW_EXTS:
+            group(stem)["raw"].append(name)
+        elif e in VIDEO_EXTS:
+            group(stem)["video"].append(name)
+        elif e in SIDECAR_EXTS:
+            inner, inner_ext = os.path.splitext(stem)  # IMG_1.CR2.xmp belongs to IMG_1
+            group(inner if inner_ext.lower() in IMAGE_EXTS | RAW_EXTS else stem)["side"].append(name)
         else:
-            found.append(os.path.join(dirpath, name))
+            skip(report, dirpath, name, e or "(no extension)")
+
+    for g in groups.values():
+        full = lambda n: os.path.join(dirpath, n)
+        if g["photo"]:
+            main = g["photo"][0]
+            found.extend(full(n) for n in g["photo"])
+            extra = list(g["raw"])                                        # RAW+JPEG pair
+            extra += [v for v in g["video"] if os.path.splitext(v)[1].lower() in LIVE_EXTS]  # Live Photo
+            found.extend(full(v) for v in g["video"] if v not in extra)
+            report["pairs"] += len(g["raw"])
+            report["live"] += len(extra) - len(g["raw"])
+        elif g["raw"]:
+            main = g["raw"][0]
+            found.extend(full(n) for n in g["raw"])
+            found.extend(full(v) for v in g["video"])
+            extra = []
+        else:
+            main = None
+            found.extend(full(v) for v in g["video"])
+            extra = []
+        if main:
+            extra += g["side"]
+            report["sidecars"] += len(g["side"])
+            if extra:
+                companions[norm(full(main))] = [full(n) for n in extra]
+        else:
+            for n in g["side"]:  # an edits file whose photo isn't here
+                skip(report, dirpath, n, os.path.splitext(n)[1].lower() + " (no matching photo)")
+
+
+def skip(report, dirpath, name, kind):
+    full = os.path.join(dirpath, name)
+    entry = report["skipped"].setdefault(kind, {"count": 0, "bytes": 0, "paths": []})
+    entry["count"] += 1
+    try:
+        entry["bytes"] += os.path.getsize(full)
+    except OSError:
+        pass
+    entry["paths"].append(full)
 
 
 def find_photos(folder, include_subfolders, skip_folder):
-    """-> (photos and videos to sort, {photo: its Live Photo clip})"""
-    skip = norm(skip_folder)
+    """-> (photos and videos to sort, {item: files that travel with it}, report of what was found/skipped)"""
+    skip_dir = norm(skip_folder)
     found, companions = [], {}
+    report = {"skipped": {}, "junk": 0, "pairs": 0, "live": 0, "sidecars": 0, "hidden_dirs": 0}
     if include_subfolders:
         for dirpath, dirnames, filenames in os.walk(folder):
             # never scan the output folder if it sits inside the source folder
-            dirnames[:] = [
-                d for d in dirnames
-                if norm(os.path.join(dirpath, d)) != skip and not d.startswith(".")
-            ]
-            _collect(dirpath, filenames, found, companions)
+            keep = []
+            for d in dirnames:
+                if norm(os.path.join(dirpath, d)) == skip_dir:
+                    continue
+                if d.startswith("."):
+                    report["hidden_dirs"] += 1
+                    continue
+                keep.append(d)
+            dirnames[:] = keep
+            _collect(dirpath, filenames, found, companions, report)
     else:
         names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
-        _collect(folder, names, found, companions)
+        _collect(folder, names, found, companions, report)
     found.sort(key=lambda p: p.lower())
-    return found, companions
+    return found, companions, report
+
+
+def human_size(n):
+    for unit in ("bytes", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:,.0f} {unit}" if unit == "bytes" else f"{n:,.1f} {unit}"
+        n /= 1024
+
+
+def write_skipped_list(out, report):
+    """A list of every file that wasn't included, for checking. Returns the file's path (or None)."""
+    path = os.path.join(out, "Skipped files.csv")
+    if not report["skipped"]:
+        if os.path.exists(path):
+            try:
+                os.remove(path)  # nothing skipped any more - don't leave an old list lying around
+            except OSError:
+                pass
+        return None
+    import csv
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["Type", "File", "Size"])
+        for kind, entry in sorted(report["skipped"].items(), key=lambda kv: -kv[1]["count"]):
+            for fp in entry["paths"]:
+                try:
+                    size = human_size(os.path.getsize(fp))
+                except OSError:
+                    size = ""
+                w.writerow([kind, fp, size])
+    return path
 
 
 def read_log(log_path):
@@ -465,9 +571,175 @@ def load_video_preview(path, max_w, max_h):
     return img, caption, meta
 
 
+# ---------------------------------------------------------------- RAW files
+
+def _tagval(tags, *names):
+    for n in names:
+        if n in tags:
+            return tags[n]
+    return None
+
+
+def _ratio(v):
+    try:
+        x = v.values[0]
+        return float(x.num) / float(x.den) if hasattr(x, "num") else float(x)
+    except Exception:
+        return None
+
+
+def _raw_tags_exifread(path):
+    """Most RAW types are TIFF-based (CR2, NEF, ARW, DNG, ORF, RW2...): exifread reads them."""
+    import logging
+    import exifread
+    logging.getLogger("exifread").setLevel(logging.CRITICAL)  # no "File format not recognized" noise
+    with open(path, "rb") as f:
+        tags = exifread.process_file(f, details=False)
+    if not tags:
+        return {}
+    d = {"date": _tagval(tags, "EXIF DateTimeOriginal", "Image DateTime"),
+         "make": _tagval(tags, "Image Make"), "model": _tagval(tags, "Image Model"),
+         "lens": _tagval(tags, "EXIF LensModel", "MakerNote LensModel"),
+         "iso": _tagval(tags, "EXIF ISOSpeedRatings", "EXIF PhotographicSensitivity")}
+    for key, tag in (("f", "EXIF FNumber"), ("t", "EXIF ExposureTime"), ("fl", "EXIF FocalLength")):
+        if tag in tags:
+            d[key] = _ratio(tags[tag])
+    try:
+        dms_ = lambda v: sum(float(x.num) / float(x.den) / 60 ** i for i, x in enumerate(v.values))
+        la = dms_(tags["GPS GPSLatitude"]) * (-1 if str(tags.get("GPS GPSLatitudeRef", "N")) == "S" else 1)
+        lo = dms_(tags["GPS GPSLongitude"]) * (-1 if str(tags.get("GPS GPSLongitudeRef", "E")) == "W" else 1)
+        d["gps"] = (la, lo)
+    except Exception:
+        pass
+    return d
+
+
+def _raw_tags_cr3(path):
+    """Canon CR3 keeps its details in CMT1 (camera), CMT2 (exposure) and CMT4 (GPS) boxes."""
+    with open(path, "rb") as f:
+        data = f.read(4_000_000)
+    boxes = {}
+    for name in (b"CMT1", b"CMT2", b"CMT4"):
+        i = data.find(name)
+        if i < 4:
+            continue
+        size = int.from_bytes(data[i - 4:i], "big")
+        ex = Image.Exif()
+        ex.load(b"Exif\x00\x00" + data[i + 4:i - 4 + size])
+        boxes[name] = ex
+    c1, c2, c4 = (boxes.get(b"CMT1", {}), boxes.get(b"CMT2", {}), boxes.get(b"CMT4", {}))
+    d = {"make": c1.get(271), "model": c1.get(272), "date": c2.get(36867) or c1.get(306),
+         "lens": c2.get(0xA434), "iso": c2.get(0x8827),
+         "f": _num(c2.get(0x829D)), "t": _num(c2.get(0x829A)), "fl": _num(c2.get(0x920A))}
+    try:
+        g = dict(c4)
+        if 2 in g and 4 in g:
+            lat = sum(_num(x) / 60 ** i for i, x in enumerate(g[2])) * (-1 if _clean(g.get(1, "N")) == "S" else 1)
+            lon = sum(_num(x) / 60 ** i for i, x in enumerate(g[4])) * (-1 if _clean(g.get(3, "E")) == "W" else 1)
+            d["gps"] = (lat, lon)
+    except Exception:
+        pass
+    return d
+
+
+def raw_metadata(path, w=None, h=None):
+    """Camera details from a RAW file, in the same shape as read_metadata."""
+    st = os.stat(path)
+    d = {}
+    for reader in ((_raw_tags_cr3,) if path.lower().endswith(".cr3") else (_raw_tags_exifread,)):
+        try:
+            d = reader(path)
+        except Exception:
+            d = {}
+    meta = []
+    taken = d.get("date")
+    if taken:
+        try:
+            caption = datetime.strptime(_clean(taken)[:19], "%Y:%m:%d %H:%M:%S").strftime("%d %b %Y, %H:%M")
+        except Exception:
+            caption = _clean(taken)
+        meta.append(("Date taken", caption))
+    else:
+        meta.append(("Date taken", "Unknown - file date " + datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y")))
+        caption = datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y (file date)")
+    size = st.st_size
+    meta += [("File", os.path.basename(path)),
+             ("Type", f"RAW ({os.path.splitext(path)[1][1:].upper()})"),
+             ("Size", f"{size / 1048576:.1f} MB" if size >= 1048576 else f"{size / 1024:.0f} KB")]
+    if w and h:
+        meta.append(("Dimensions", f"{w:,} × {h:,}  ({w * h / 1e6:.1f} MP)"))
+    make = _clean(d.get("make") or "")
+    model = _clean(d.get("model") or "")
+    if model and make and not model.lower().startswith(make.lower().split()[0]):
+        model = f"{make} {model}"
+    if model or make:
+        meta.append(("Camera", model or make))
+    lens = _clean(d.get("lens") or "")
+    if lens:
+        meta.append(("Lens", lens))
+    settings = []
+    if d.get("f"):
+        settings.append(f"f/{d['f']:.1f}".replace(".0", ""))
+    if d.get("t"):
+        t = d["t"]
+        settings.append(f"1/{round(1 / t)}s" if t < 1 else f"{t:g}s")
+    iso = d.get("iso")
+    if iso:
+        settings.append(f"ISO {iso[0] if isinstance(iso, tuple) else iso}")
+    if d.get("fl"):
+        settings.append(f"{d['fl']:g} mm")
+    if settings:
+        meta.append(("Settings", "  ·  ".join(settings)))
+    if d.get("gps"):
+        meta.append(("Location", fmt_latlon(*d["gps"])))
+    return meta, caption
+
+
+def load_raw_preview(path, max_w, max_h):
+    if not RAW_OK:
+        meta, caption = raw_metadata(path)
+        return None, "RAW preview not available", meta
+    img, w, h = None, None, None
+    with rawpy.imread(path) as raw:
+        w, h = raw.sizes.width, raw.sizes.height
+        flip = raw.sizes.flip
+        if flip in (5, 6):
+            w, h = h, w
+        try:
+            th = raw.extract_thumb()  # the JPEG preview the camera saved inside the RAW - fast
+            if th.format == rawpy.ThumbFormat.JPEG:
+                img = Image.open(io.BytesIO(th.data))
+                img.draft("RGB", (max_w, max_h))
+                img = img.convert("RGB")
+            else:
+                img = Image.fromarray(th.data)
+            if flip == 3:
+                img = img.rotate(180)
+            elif flip == 5:
+                img = img.rotate(90, expand=True)
+            elif flip == 6:
+                img = img.rotate(-90, expand=True)
+        except Exception:
+            # no usable preview inside: develop the RAW at half size (slower, but always works)
+            rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
+            img = Image.fromarray(rgb)
+    img.thumbnail((max_w, max_h), Image.LANCZOS)
+    meta, caption = raw_metadata(path, w, h)
+    return img, caption, meta
+
+
 def load_preview(path, max_w, max_h):
     """Open an image, read its details, fix its rotation, shrink it to fit the screen.
     Runs in a background thread."""
+    if is_raw(path):
+        try:
+            return load_raw_preview(path, max_w, max_h)
+        except Exception as e:
+            try:
+                meta, _ = raw_metadata(path)
+            except Exception:
+                meta = [("File", os.path.basename(path))]
+            return None, f"Can't preview this RAW file ({type(e).__name__})", meta
     if is_video(path):
         try:
             return load_video_preview(path, max_w, max_h)
@@ -501,7 +773,7 @@ class PhotoSorter:
         self.settings = load_settings()
         self.pool = ThreadPoolExecutor(max_workers=3)
         self.cache = {}  # path -> Future
-        self.companions = {}  # photo -> its Live Photo clip
+        self.companions = {}  # item -> files that travel with it (Live clip, RAW, .xmp, .aae)
         self.tk_img = None
 
         root.title("Photo Sorter")
@@ -620,6 +892,7 @@ class PhotoSorter:
                 (["Backspace"], "Undo"),
             ]),
             ("Anywhere", [
+                (["Enter"], "On the “Here's what I found” screen: start sorting"),
                 (["F1"], "Switch between these help tabs"),
                 (["Esc"], "From a help tab, back to sorting"),
             ]),
@@ -683,7 +956,9 @@ class PhotoSorter:
             "The file  .photo_sorter_log.jsonl  in the sorted folder is the app's record of every decision. "
             "Don't delete it, or the app forgets your progress.",
             "It recognises photos by where they are. If you move or rename the originals, they'll come up again.",
-            "Works with JPG, PNG, HEIC, WEBP, GIF, BMP, TIFF and most video types (MP4, MOV, AVI, MKV…).",
+            "Works with JPG, PNG, HEIC, WEBP, GIF, BMP, TIFF, PSD, camera RAW (CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2…) "
+            "and most video types (MP4, MOV, AVI, MKV…). RAW+JPEG pairs count as one photo, and .xmp / .aae edits files go with their photo.",
+            "Before sorting starts you see what was found, and anything left out. The full list is saved as Skipped files.csv in the sorted folder.",
             "Press I to hide the details panel if you want a bigger picture.",
         ])
         return outer
@@ -936,7 +1211,7 @@ class PhotoSorter:
 
         try:
             os.makedirs(out, exist_ok=True)
-            photos, self.companions = find_photos(src, self.sub_var.get(), out)
+            photos, self.companions, self.report = find_photos(src, self.sub_var.get(), out)
         except Exception as e:
             messagebox.showerror("Photo Sorter", f"Couldn't read the folders:\n{e}")
             self.show_setup()
@@ -951,17 +1226,22 @@ class PhotoSorter:
             messagebox.showwarning("Photo Sorter", f"Couldn't move your earlier sorted photos into the Photos folder:\n{e}")
         if os.path.exists(self.log_path):
             unhide_file(self.log_path)
-        # photos sorted before Live Photo support: bring their clips along now
+        # sorted with an older version? bring along any Live clips / RAW / edits files that were missed
+        originals = {}
+        for p in photos:
+            originals[norm(p)] = p
         for key, (c, dest) in done.items():
-            clip = self.companions.get(key)
-            if clip and dest:
+            extras = self.companions.get(key)
+            if extras and dest and key in originals:
                 copy = os.path.join(out, space_of(c), os.path.basename(dest))
-                target = os.path.splitext(copy)[0] + os.path.splitext(clip)[1]
-                if os.path.exists(copy) and not os.path.exists(target):
-                    try:
-                        shutil.copy2(clip, target)
-                    except Exception:
-                        pass
+                stem = os.path.splitext(os.path.basename(originals[key]))[0]
+                for extra in extras:
+                    target = os.path.splitext(copy)[0] + os.path.basename(extra)[len(stem):]
+                    if os.path.exists(copy) and not os.path.exists(target):
+                        try:
+                            shutil.copy2(extra, target)
+                        except Exception:
+                            pass
         self.total = len(photos)
         if photos:
             try:
@@ -981,11 +1261,102 @@ class PhotoSorter:
         for c, _ in done.values():
             self.counts[space_of(c)] = self.counts.get(space_of(c), 0) + 1
 
+        try:
+            self.skipped_file = write_skipped_list(out, self.report)
+        except Exception:
+            self.skipped_file = None
+        self.show_found(photos)
+
+    def show_found(self, photos):
+        """What the scan found - and anything it's leaving out - before sorting starts."""
+        self.clear()
+        r = self.report
+        n_raw = sum(1 for p in photos if is_raw(p))
+        n_vid = sum(1 for p in photos if is_video(p))
+        n_photo = len(photos) - n_raw - n_vid
+        box = tk.Frame(self.frame, bg=PANEL, padx=36, pady=28)
+        box.place(relx=0.5, rely=0.5, anchor="center")
+        self.label(box, "Here's what I found", 20, True).pack(anchor="w")
+        self.label(box, self.src, 9, color=MUTED).pack(anchor="w", pady=(2, 14))
+
+        tiles = tk.Frame(box, bg=PANEL)
+        tiles.pack(anchor="w")
+        spec = [("Photos", n_photo, FG), ("RAW", n_raw, "#f0b35a"), ("Videos", n_vid, "#a78bfa")]
+        for title, n, color in spec:
+            if not n and title != "Photos":
+                continue
+            t = tk.Frame(tiles, bg="#363636", padx=18, pady=10)
+            t.pack(side="left", padx=(0, 10))
+            tk.Label(t, text=f"{n:,}", bg="#363636", fg=color, font=("Segoe UI", 22, "bold")).pack(anchor="w")
+            tk.Label(t, text=title.upper(), bg="#363636", fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+
+        notes = []
+        if r["pairs"]:
+            notes.append(f"{r['pairs']:,} RAW file{'s are' if r['pairs'] != 1 else ' is'} paired with a JPEG of the same name, "
+                         "so each pair counts as one photo")
+        if r["live"]:
+            notes.append(f"{r['live']:,} iPhone Live Photo clip{'s go' if r['live'] != 1 else ' goes'} along with {'their photos' if r['live'] != 1 else 'its photo'}")
+        if r["sidecars"]:
+            notes.append(f"{r['sidecars']:,} edits file{'s' if r['sidecars'] != 1 else ''} (.xmp / .aae) "
+                         f"{'go' if r['sidecars'] != 1 else 'goes'} along with {'their photos' if r['sidecars'] != 1 else 'its photo'}")
+        if self.already:
+            notes.append(f"{self.already:,} already sorted, so {len(self.queue):,} to go")
+        for n in notes:
+            self.label(box, "•  " + n, 10, color=FG).pack(anchor="w", pady=1)
+
+        # anything not included
+        skipped = r["skipped"]
+        n_skip = sum(e["count"] for e in skipped.values())
+        sec = tk.Frame(box, bg="#363636", padx=16, pady=12)
+        sec.pack(anchor="w", fill="x", pady=(16, 0))
+        if not n_skip:
+            tk.Label(sec, text="✓  Every file was included. Nothing skipped.", bg="#363636", fg="#4cc38a",
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        else:
+            tk.Label(sec, text=f"Not included:  {n_skip:,} file{'s' if n_skip != 1 else ''}"
+                     + f"  ({human_size(sum(e['bytes'] for e in skipped.values()))})",
+                     bg="#363636", fg="#f0b35a", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 6))
+            grid = tk.Frame(sec, bg="#363636")
+            grid.pack(anchor="w")
+            rows = sorted(skipped.items(), key=lambda kv: -kv[1]["count"])
+            for i, (kind, e) in enumerate(rows[:10]):
+                example = os.path.relpath(e["paths"][0], self.src)
+                for col, (txt, fg, w) in enumerate([(f"{e['count']:,}", FG, 6), (kind, FG, 26),
+                                                    (human_size(e["bytes"]), MUTED, 10), ("e.g.  " + example, MUTED, 0)]):
+                    tk.Label(grid, text=txt, bg="#363636", fg=fg, font=("Segoe UI", 10), anchor="w",
+                             width=w or None).grid(row=i, column=col, sticky="w", padx=(0, 8))
+            if len(rows) > 10:
+                tk.Label(sec, text=f"…and {len(rows) - 10} more types", bg="#363636", fg=MUTED,
+                         font=("Segoe UI", 9)).pack(anchor="w")
+            tk.Label(sec, text="These stay exactly where they are. The full list is saved as  Skipped files.csv  "
+                     "in the sorted folder.", bg="#363636", fg=MUTED, font=("Segoe UI", 9),
+                     wraplength=640, justify="left").pack(anchor="w", pady=(8, 0))
+        extra = []
+        if r["junk"]:
+            extra.append(f"{r['junk']:,} system file{'s' if r['junk'] != 1 else ''} (Thumbs.db, desktop.ini…)")
+        if r["hidden_dirs"]:
+            extra.append(f"{r['hidden_dirs']:,} hidden folder{'s' if r['hidden_dirs'] != 1 else ''}")
+        if extra:
+            self.label(box, "Also ignored: " + ", ".join(extra), 9, color=MUTED).pack(anchor="w", pady=(6, 0))
+
+        row = tk.Frame(box, bg=PANEL)
+        row.pack(anchor="w", pady=(18, 0))
+        if photos:
+            go = "Start sorting  ▶   (Enter)" if not self.already else "Carry on sorting  ▶   (Enter)"
+            self.button(row, go, self.show_sorter, color=GREEN, size=12).pack(side="left")
+        if self.skipped_file:
+            self.button(row, "Open skipped list", lambda: os.startfile(self.skipped_file),
+                        color="#555555").pack(side="left", padx=8)
+        self.button(row, "Back", self.show_setup, color="#555555").pack(side="left", padx=(0 if self.skipped_file else 8, 0))
         if not photos:
-            messagebox.showinfo("Photo Sorter", "No photos or videos found in that folder.")
-            self.show_setup()
-            return
-        self.show_sorter()
+            self.label(box, "No photos or videos found in that folder.", 11, True, color="#e06c6c").pack(anchor="w", pady=(12, 0))
+
+        def keys(e):
+            if e.keysym in ("Return", "KP_Enter", "space") and photos:
+                self.show_sorter()
+            elif e.keysym == "Escape":
+                self.show_setup()
+        self.key_handler = keys
 
     # ---------------- sorting screen
 
@@ -1135,7 +1506,9 @@ class PhotoSorter:
         path = getattr(self, "current_path", None)
         if not path or self.pos >= len(self.queue):
             return None
-        return path if is_video(path) else self.companions.get(norm(path))
+        if is_video(path):
+            return path
+        return next((c for c in self.companions.get(norm(path), []) if is_video(c)), None)
 
     def play(self):
         clip = self.playable()
@@ -1164,8 +1537,14 @@ class PhotoSorter:
         rows = list(meta)
         if video:
             rows.append(("Goes to", "The Videos folder (same folder names as Photos)"))
-        elif norm(self.current_path) in self.companions:
-            rows.append(("Live Photo", "Yes - its video clip is kept with it. Press P to play."))
+        for extra in self.companions.get(norm(self.current_path), []):
+            name = os.path.basename(extra)
+            if is_video(extra):
+                rows.append(("Live Photo", "Yes - its video clip is kept with it. Press P to play."))
+            elif is_raw(extra):
+                rows.append(("RAW file", f"{name} goes with it"))
+            else:
+                rows.append(("Edits file", f"{name} goes with it"))
         rows.insert(1 if rows and rows[0][0] == "Date taken" else 0, ("Folder", folder or "(top folder)"))
         for label, value in rows:
             t.insert("end", label.upper() + "\n", "label")
@@ -1288,15 +1667,18 @@ class PhotoSorter:
         src = self.queue[self.pos]
         space = os.path.join("Videos" if is_video(src) else "Photos", cat)
         folder = os.path.join(self.out, space)
-        clip = self.companions.get(norm(src))
+        stem = os.path.splitext(os.path.basename(src))[0]
+        travel = self.companions.get(norm(src), [])
+        # IMG_1.JPG + IMG_1.CR2 + IMG_1.CR2.xmp -> keep the same endings on the copies
+        endings = [os.path.basename(t)[len(stem):] for t in travel]
         extras = []
         try:
             os.makedirs(folder, exist_ok=True)
-            dest = unique_dest(folder, os.path.basename(src), [os.path.splitext(clip)[1]] if clip else ())
+            dest = unique_dest(folder, os.path.basename(src), endings)
             shutil.copy2(src, dest)
-            if clip:  # Live Photo: copy the clip next to the photo with the matching name
-                extras.append(os.path.splitext(dest)[0] + os.path.splitext(clip)[1])
-                shutil.copy2(clip, extras[0])
+            for t, ending in zip(travel, endings):
+                extras.append(os.path.splitext(dest)[0] + ending)
+                shutil.copy2(t, extras[-1])
             append_log(self.log_path, {"src": src, "cat": space, "dest": dest, "extra": extras})
         except Exception as e:
             messagebox.showerror("Photo Sorter", f"Couldn't copy this file:\n{e}")

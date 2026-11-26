@@ -92,8 +92,11 @@ No videos in your folder? Nothing changes. It works just like before.
 
 ## Good to know
 
-- **Photos:** JPG, PNG, HEIC (iPhone), WEBP, GIF, BMP, TIFF.
+- **Photos:** JPG, PNG, HEIC (iPhone), WEBP, AVIF, GIF, BMP, TIFF, PSD.
+  **Camera RAW:** CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2, PEF, SRW and more. A **RAW+JPEG pair** (same name) counts as one photo, and both files are copied together.
+  **Edits files:** `.xmp` (Bridge / Lightroom) and `.aae` (iPhone) are copied along with their photo.
   **Videos:** MP4, MOV, M4V, AVI, MKV, WMV, 3GP, MTS/M2TS, WEBM, MPG.
+- **Nothing is skipped without telling you.** Before sorting starts, a *Here's what I found* screen shows how many photos, RAW files and videos there are, plus every file type that **isn't** included (PDFs, music…). The full list is saved as `Skipped files.csv` in the sorted folder.
 - **The `Delete` folder is for you to delete yourself.** The app never deletes anything. `Delete` just holds copies of everything you said No to, so you can check them before throwing them away. Once you're happy with the sort, you can delete the `Delete` folder (and the original folder, since everything you wanted is now copied into `Keep`).
 - Because files are copied, you need free disk space roughly equal to what you're sorting.
 - Files with the same name from different folders don't overwrite each other: the second becomes `IMG_0001 (1).jpg`.
