@@ -48,7 +48,7 @@ Double-click **`PhotoSorter.exe`**. In the window that opens:
 | Key | Does |
 |---|---|
 | `Enter` | Just `Keep` (no subfolder) |
-| `1`–`9` | That folder, e.g. `Keep\Holiday` |
+| `1`–`9` | That folder, e.g. `Photos\Keep\Holiday` |
 | `F` | **New folder**: type a name, and the photo goes straight in it |
 | `Esc` | Cancel, back to Yes / No |
 
@@ -67,14 +67,15 @@ Videos from any phone or camera (iPhone, Android, GoPro, Canon…) come up in th
 
 - You see a still from the video with a ▶ button. Press **P** or click ▶ to watch it in your normal video player, then close the player and press Yes / No.
 - The details panel shows the length, resolution, date, camera and location.
-- Videos go into their **own space** so they don't get mixed in with photos, but the **folder names are shared**:
+- Photos and videos each get their **own space**, but the **folder names are shared**:
 
 ```
 My Photos - Sorted\
-├── Keep\
-│   ├── Holiday\        ← holiday photos
-│   └── Cats\
-├── Delete\
+├── Photos\
+│   ├── Keep\
+│   │   ├── Holiday\    ← holiday photos
+│   │   └── Cats\
+│   └── Delete\
 └── Videos\
     ├── Keep\
     │   ├── Holiday\    ← holiday videos
@@ -96,6 +97,8 @@ No videos in your folder? Nothing changes. It works just like before.
 - **The `Delete` folder is for you to delete yourself.** The app never deletes anything. `Delete` just holds copies of everything you said No to, so you can check them before throwing them away. Once you're happy with the sort, you can delete the `Delete` folder (and the original folder, since everything you wanted is now copied into `Keep`).
 - Because files are copied, you need free disk space roughly equal to what you're sorting.
 - Files with the same name from different folders don't overwrite each other: the second becomes `IMG_0001 (1).jpg`.
+- **How it remembers where you got to:** the sorted folder has a hidden file, `.photo_sorter_log.jsonl`. It's a running record with one line per decision: which original file, which folder it went to, and where the copy was saved (plus a line when you press Undo). When you reopen a folder, any file whose original location is in that record is skipped. If you move or rename the originals, they'll come up again.
+- Sorted a folder with an older version? Opening it again tidies your earlier folders into `Photos\` automatically, and adds any Live Photo clips that were missed.
 - Folders whose names start with a dot (like `.thumbnails`) are skipped.
 
 ---

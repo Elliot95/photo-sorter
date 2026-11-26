@@ -143,8 +143,49 @@ def read_log(log_path):
 
 
 def append_log(log_path, rec):
+    new = not os.path.exists(log_path)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
+    if new:
+        hide_file(log_path)
+
+
+def hide_file(path):
+    """Mark a file hidden in Windows Explorer (it's just the app's bookmark)."""
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x02)
+    except Exception:
+        pass
+
+
+TOP_SPACES = ("Photos", "Videos")
+
+
+def space_of(cat):
+    """Log entries from before v1.4 had photo folders at the top level - they now live in Photos."""
+    first = cat.split(os.sep)[0].split("/")[0]
+    return cat if first in TOP_SPACES else os.path.join("Photos", cat)
+
+
+def move_into_photos(out, done):
+    """One-off tidy-up of a folder sorted with an older version: Keep, Delete, Holiday... -> Photos\\..."""
+    legacy = {c.split(os.sep)[0] for c, _ in done.values() if c.split(os.sep)[0] not in TOP_SPACES}
+    for name in legacy:
+        old = os.path.join(out, name)
+        if not os.path.isdir(old):
+            continue
+        new = os.path.join(out, "Photos", name)
+        if not os.path.exists(new):
+            os.makedirs(os.path.dirname(new), exist_ok=True)
+            shutil.move(old, new)
+            continue
+        for dirpath, _, files in os.walk(old):  # merge into an existing Photos\\name
+            target = os.path.join(new, os.path.relpath(dirpath, old))
+            os.makedirs(target, exist_ok=True)
+            for f in files:
+                shutil.move(os.path.join(dirpath, f), unique_dest(target, f))
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def unique_dest(folder, filename, also_exts=()):
@@ -563,14 +604,31 @@ class PhotoSorter:
         self.src, self.out, self.mode, self.cats = src, out, mode, cats
         self.log_path = os.path.join(out, LOG_NAME)
         done = read_log(self.log_path)
+        try:
+            move_into_photos(out, done)
+        except Exception as e:
+            messagebox.showwarning("Photo Sorter", f"Couldn't move your earlier sorted photos into the Photos folder:\n{e}")
+        if os.path.exists(self.log_path):
+            hide_file(self.log_path)
+        # photos sorted before Live Photo support: bring their clips along now
+        for key, (c, dest) in done.items():
+            clip = self.companions.get(key)
+            if clip and dest:
+                copy = os.path.join(out, space_of(c), os.path.basename(dest))
+                target = os.path.splitext(copy)[0] + os.path.splitext(clip)[1]
+                if os.path.exists(copy) and not os.path.exists(target):
+                    try:
+                        shutil.copy2(clip, target)
+                    except Exception:
+                        pass
         self.total = len(photos)
         self.already = sum(1 for p in photos if norm(p) in done)
         self.queue = [p for p in photos if norm(p) not in done]
         self.pos = 0
         self.history = []  # for undo: (pos, src, dest)
-        self.counts = {c: 0 for c in cats}
+        self.counts = {}
         for c, _ in done.values():
-            self.counts[c] = self.counts.get(c, 0) + 1
+            self.counts[space_of(c)] = self.counts.get(space_of(c), 0) + 1
 
         if not photos:
             messagebox.showinfo("Photo Sorter", "No photos or videos found in that folder.")
@@ -653,9 +711,9 @@ class PhotoSorter:
                 self.keymap[str(i)] = lambda c=cat: self.choose(c)
 
     def keep_folders(self):
-        """Folders inside Keep - shared by photos (Keep\\x) and videos (Videos\\Keep\\x)."""
+        """Folders inside Keep - shared by photos (Photos\\Keep\\x) and videos (Videos\\Keep\\x)."""
         names = {}
-        for keep in (os.path.join(self.out, "Keep"), os.path.join(self.out, "Videos", "Keep")):
+        for keep in (os.path.join(self.out, "Photos", "Keep"), os.path.join(self.out, "Videos", "Keep")):
             try:
                 for d in os.listdir(keep):
                     if os.path.isdir(os.path.join(keep, d)) and not d.startswith("."):
@@ -749,7 +807,7 @@ class PhotoSorter:
         folder = os.path.dirname(os.path.relpath(self.current_path, self.src))
         rows = list(meta)
         if video:
-            rows.append(("Goes to", "The Videos folder (same folder names as photos)"))
+            rows.append(("Goes to", "The Videos folder (same folder names as Photos)"))
         elif norm(self.current_path) in self.companions:
             rows.append(("Live Photo", "Yes - its video clip is kept with it. Press P to play."))
         rows.insert(1 if rows and rows[0][0] == "Date taken" else 0, ("Folder", folder or "(top folder)"))
@@ -843,7 +901,7 @@ class PhotoSorter:
         if self.pos >= len(self.queue):
             return
         src = self.queue[self.pos]
-        space = os.path.join("Videos", cat) if is_video(src) else cat
+        space = os.path.join("Videos" if is_video(src) else "Photos", cat)
         folder = os.path.join(self.out, space)
         clip = self.companions.get(norm(src))
         extras = []
@@ -905,7 +963,7 @@ class PhotoSorter:
         box = tk.Frame(self.frame, bg=PANEL, padx=40, pady=30)
         box.place(relx=0.5, rely=0.5, anchor="center")
         self.label(box, "All done! 🎉", 22, True).pack(anchor="w")
-        lines = "\n".join(f"{c}:  {n:,}" for c, n in self.counts.items())
+        lines = "\n".join(f"{c}:  {n:,}" for c, n in sorted(self.counts.items()) if n)
         self.label(box, lines, 12, justify="left").pack(anchor="w", pady=12)
         skipped = sum(1 for h in self.history if h[1] is None)
         if skipped:
