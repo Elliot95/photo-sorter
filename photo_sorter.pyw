@@ -957,19 +957,156 @@ class PhotoSorter:
         self.cache.clear()
         self.show_setup()
 
+    # ---------------- summary infographic
+
+    @staticmethod
+    def _tree_rows(counts):
+        """counts {'Photos\\\\Keep\\\\cats': 3, ...} -> flat rows for drawing a folder tree."""
+        root = {"name": "", "own": 0, "kids": {}}
+        for key, n in counts.items():
+            if not n:
+                continue
+            node = root
+            for part in key.split(os.sep):
+                node = node["kids"].setdefault(part.lower(), {"name": part, "own": 0, "kids": {}})
+            node["own"] += n
+
+        def total(node):
+            return node["own"] + sum(total(k) for k in node["kids"].values())
+
+        def order(node):
+            name = node["name"].lower()
+            return (0 if name in ("photos", "keep") else 2 if name == "delete" else 1, name)
+
+        rows = []
+
+        def walk(node, depth, path, lasts, kind):
+            kids = sorted(node["kids"].values(), key=order)
+            if node["own"] and kids:  # files directly in a folder that also has subfolders
+                kids = [{"name": "(not in a subfolder)", "own": node["own"], "kids": {}, "loose": True}] + kids
+            for i, kid in enumerate(kids):
+                last = i == len(kids) - 1
+                kpath = path if kid.get("loose") else os.path.join(path, kid["name"]) if path else kid["name"]
+                low = kid["name"].lower()
+                kkind = "delete" if low == "delete" else "keep" if low == "keep" else kind
+                rows.append({"depth": depth, "name": kid["name"], "count": total(kid), "path": kpath,
+                             "lasts": lasts + [last], "kind": kkind, "parent": bool(kid["kids"]),
+                             "loose": kid.get("loose", False)})
+                walk(kid, depth + 1, kpath, lasts + [last], kkind)
+
+        walk(root, 0, "", [], "folder")
+        return rows
+
     def show_done(self):
         self.clear()
-        box = tk.Frame(self.frame, bg=PANEL, padx=40, pady=30)
+        counts = {k: n for k, n in self.counts.items() if n}
+        grand = sum(counts.values())
+        deleted = sum(n for k, n in counts.items() if "delete" in [p.lower() for p in k.split(os.sep)])
+        videos = sum(n for k, n in counts.items() if k.split(os.sep)[0] == "Videos")
+        kept = grand - deleted
+        this_session = sum(1 for h in self.history if h[1] is not None)
+        skipped = sum(1 for h in self.history if h[1] is None)
+
+        box = tk.Frame(self.frame, bg=PANEL, padx=36, pady=28)
         box.place(relx=0.5, rely=0.5, anchor="center")
         self.label(box, "All done! 🎉", 22, True).pack(anchor="w")
-        lines = "\n".join(f"{c}:  {n:,}" for c, n in sorted(self.counts.items()) if n)
-        self.label(box, lines, 12, justify="left").pack(anchor="w", pady=12)
-        skipped = sum(1 for h in self.history if h[1] is None)
+        self.label(box, f"Everything sorted into  “{os.path.basename(self.out)}”  so far"
+                   + (f"   ·   {this_session:,} this session" if this_session else ""),
+                   10, color=MUTED).pack(anchor="w", pady=(2, 14))
+
+        # --- headline tiles
+        tiles = tk.Frame(box, bg=PANEL)
+        tiles.pack(anchor="w", fill="x")
+        spec = [("Sorted", grand, FG), ("Kept", kept, "#4cc38a"), ("Delete", deleted, "#e06c6c")]
+        if videos:
+            spec.append(("Videos", videos, "#a78bfa"))
+        for title, n, color in spec:
+            t = tk.Frame(tiles, bg="#363636", padx=18, pady=10)
+            t.pack(side="left", padx=(0, 10))
+            tk.Label(t, text=f"{n:,}", bg="#363636", fg=color, font=("Segoe UI", 22, "bold")).pack(anchor="w")
+            tk.Label(t, text=title.upper(), bg="#363636", fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+
+        W = 680
+        # --- kept vs delete bar
+        if grand:
+            bar = tk.Canvas(box, width=W, height=46, bg=PANEL, highlightthickness=0)
+            bar.pack(anchor="w", pady=(16, 4))
+            kw = round(W * kept / grand)
+            if kw:
+                bar.create_rectangle(0, 0, kw, 18, fill="#2e8b57", width=0)
+            if kw < W:
+                bar.create_rectangle(kw, 0, W, 18, fill="#b23b3b", width=0)
+            bar.create_text(0, 32, anchor="w", fill="#4cc38a", font=("Segoe UI", 10, "bold"),
+                            text=f"Kept {kept:,}  ({100 * kept / grand:.0f}%)")
+            bar.create_text(W, 32, anchor="e", fill="#e06c6c", font=("Segoe UI", 10, "bold"),
+                            text=f"Delete {deleted:,}  ({100 * deleted / grand:.0f}%)")
+
+        # --- folder tree with a bar per folder (click a row to open that folder)
+        self.label(box, "Folders  ·  click one to open it", 10, color=MUTED).pack(anchor="w", pady=(14, 6))
+        rows = self._tree_rows(counts)
+        ROW, IND, NAME_W, BAR_X = 30, 24, 300, 370
+        BAR_W = W - BAR_X - 60
+        height = max(ROW, len(rows) * ROW)
+        holder = tk.Frame(box, bg=PANEL)
+        holder.pack(anchor="w")
+        view_h = min(height, int(self.screen_h * 0.42))
+        tree = tk.Canvas(holder, width=W, height=view_h, bg=PANEL, highlightthickness=0,
+                         scrollregion=(0, 0, W, height))
+        tree.pack(side="left")
+        if height > view_h:
+            sb = tk.Scrollbar(holder, orient="vertical", command=tree.yview)
+            sb.pack(side="left", fill="y")
+            tree.config(yscrollcommand=sb.set)
+            tree.bind_all("<MouseWheel>", lambda e: tree.winfo_exists() and tree.yview_scroll(-e.delta // 120, "units"))
+        colors = {"delete": "#b23b3b", "keep": "#2e8b57", "folder": BLUE}
+        line = "#555555"
+        for i, r in enumerate(rows):
+            y0, ym = i * ROW, i * ROW + ROW // 2
+            d = r["depth"]
+            tag = f"row{i}"
+            tree.create_rectangle(0, y0, W, y0 + ROW, fill=PANEL, outline="", tags=(tag, "hit"))
+            # connector lines
+            for lvl in range(1, d):  # carry on the lines of ancestors that have more siblings below
+                if not r["lasts"][lvl]:
+                    x = lvl * IND - IND // 2 + 6
+                    tree.create_line(x, y0, x, y0 + ROW, fill=line, tags=tag)
+            if d:
+                x = d * IND - IND // 2 + 6
+                tree.create_line(x, y0, x, ym if r["lasts"][d] else y0 + ROW, fill=line, tags=tag)
+                tree.create_line(x, ym, x + IND // 2, ym, fill=line, tags=tag)
+            x = d * IND + 8
+            icon = "▸" if r["loose"] else ("📂" if r["parent"] else "📁")
+            bold = d == 0
+            tree.create_text(x, ym, anchor="w", tags=tag, fill=MUTED if r["loose"] else FG,
+                             font=("Segoe UI", 11 if bold else 10, "bold" if bold else "normal"),
+                             text=f"{icon}  {r['name']}")
+            tree.create_text(NAME_W + 50, ym, anchor="e", tags=tag, fill=FG,
+                             font=("Segoe UI", 10, "bold" if bold else "normal"), text=f"{r['count']:,}")
+            share = r["count"] / grand if grand else 0
+            bw = max(2, round(BAR_W * share))
+            color = "#7a5cb8" if d == 0 and r["name"] == "Videos" else colors[r["kind"]]
+            tree.create_rectangle(BAR_X, ym - 6, BAR_X + bw, ym + 6, fill=color, width=0, tags=tag)
+            tree.create_text(BAR_X + bw + 8, ym, anchor="w", fill=MUTED, font=("Segoe UI", 9),
+                             text=f"{100 * share:.0f}%", tags=tag)
+            folder = os.path.join(self.out, r["path"])
+
+            def open_it(e, f=folder):
+                if os.path.isdir(f):
+                    os.startfile(f)
+
+            def hover(e, t=tag, on=True):
+                tree.itemconfig(f"{t}&&hit", fill="#383838" if on else PANEL)
+                tree.config(cursor="hand2" if on else "")
+
+            tree.tag_bind(tag, "<Button-1>", open_it)
+            tree.tag_bind(tag, "<Enter>", hover)
+            tree.tag_bind(tag, "<Leave>", lambda e, t=tag: hover(e, t, False))
+
         if skipped:
             self.label(box, f"{skipped} skipped - they'll come up again next time you open this folder.",
-                       10, color=MUTED).pack(anchor="w")
+                       10, color=MUTED).pack(anchor="w", pady=(10, 0))
         row = tk.Frame(box, bg=PANEL)
-        row.pack(anchor="w", pady=(16, 0))
+        row.pack(anchor="w", pady=(18, 0))
         self.button(row, "Open sorted folder", lambda: os.startfile(self.out), color=GREEN).pack(side="left")
         self.button(row, "↶ Undo last", self.undo, color="#555555").pack(side="left", padx=8)
         self.button(row, "Back to menu", self.show_setup, color="#555555").pack(side="left")
