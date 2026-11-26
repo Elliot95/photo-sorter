@@ -83,6 +83,15 @@ def norm(path):
     return os.path.normcase(os.path.abspath(path))
 
 
+def default_output(src):
+    """'<folder> - Sorted' right next to the folder being sorted."""
+    src = os.path.abspath(os.path.normpath(src.strip().strip('"')))
+    parent, name = os.path.split(src.rstrip("\\/"))
+    if not name:  # a whole drive, e.g. D:\\ - nothing sits "next to" it, so put it inside
+        return os.path.join(src, "Sorted")
+    return os.path.join(parent, name + " - Sorted")
+
+
 def is_video(path):
     return os.path.splitext(path)[1].lower() in VIDEO_EXTS
 
@@ -516,10 +525,16 @@ class PhotoSorter:
                        activeforeground=FG, font=("Segoe UI", 10)).grid(row=4, column=0, columnspan=3, sticky="w")
 
         # output
-        self.label(box, "2. Where to put the sorted folders").grid(row=5, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        self.label(box, "2. Where to put the sorted folders   (filled in for you: a  \"- Sorted\"  folder next to it)",
+                   ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(12, 0))
         tk.Entry(box, textvariable=self.out_var, width=60, font=("Segoe UI", 10)).grid(
             row=6, column=0, columnspan=2, sticky="we", pady=4)
         self.button(box, "Browse…", self.pick_output, size=9).grid(row=6, column=2, padx=(8, 0))
+
+        self._auto_out = default_output(self.src_var.get()) if self.src_var.get().strip() else ""
+        if not self.out_var.get().strip() and self._auto_out:
+            self.out_var.set(self._auto_out)
+        self.src_var.trace_add("write", lambda *a: self.follow_source())
 
         # mode
         self.label(box, "3. How to sort").grid(row=7, column=0, columnspan=3, sticky="w", pady=(12, 4))
@@ -546,11 +561,22 @@ class PhotoSorter:
         self.cat_text.configure(state="normal" if self.mode_var.get() == "cats" else "disabled",
                                 bg="white" if self.mode_var.get() == "cats" else "#777777")
 
+    def follow_source(self):
+        """Typed or pasted a new photo folder? Move the automatic destination with it -
+        but never overwrite a destination the person chose themselves."""
+        src = self.src_var.get().strip()
+        new = default_output(src) if src else ""
+        cur = self.out_var.get().strip()
+        if not cur or norm(cur) == norm(self._auto_out or cur + "x"):
+            self.out_var.set(new)
+        self._auto_out = new
+
     def pick_source(self):
         folder = filedialog.askdirectory(title="Choose the folder of photos to sort")
         if folder:
             self.src_var.set(os.path.normpath(folder))
-            self.out_var.set(os.path.normpath(folder) + " - Sorted")
+            self._auto_out = default_output(folder)
+            self.out_var.set(self._auto_out)
 
     def pick_output(self):
         folder = filedialog.askdirectory(title="Choose where the sorted folders should go")
@@ -559,7 +585,7 @@ class PhotoSorter:
 
     def start(self):
         src = self.src_var.get().strip().strip('"')
-        out = self.out_var.get().strip().strip('"') or (src + " - Sorted")
+        out = self.out_var.get().strip().strip('"') or (default_output(src) if src else "")
         if not src or not os.path.isdir(src):
             messagebox.showwarning("Photo Sorter", "Please choose a folder of photos first.")
             return
