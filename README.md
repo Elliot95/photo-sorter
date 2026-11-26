@@ -2,8 +2,8 @@
 
 Quickly sort thousands of photos one at a time with a click or a key. No Bridge, no faff.
 
-- **Round 1:** Keep or Delete
-- **Round 2:** sort the keepers into your own folders (Friends, Holiday, Cats…)
+- **No** sends a photo to `Delete`.
+- **Yes** asks which folder inside `Keep` it belongs in (Friends, Holiday, Cats…). You can make a new folder on the spot.
 
 A side panel shows each photo's details: date taken, camera, lens, settings, size and location.
 
@@ -29,10 +29,35 @@ Double-click **`PhotoSorter.exe`**. In the window that opens:
 2. Choose where the sorted folders should go. It suggests `<your folder> - Sorted`.
 3. Pick how to sort, then click **Start**.
 
-### Round 1: Keep / Delete
+### Keep / Delete
 
 | Key | Does |
 |---|---|
+| `N` or `←` | **No**: copy to `Delete` |
+| `Y` or `→` | **Yes**: choose a folder for it (see below) |
+| `1`–`9` | Skip the question and send it straight to that `Keep` folder |
+| `Space` | Skip for now (it comes back next time) |
+| `Backspace` | Undo the last one |
+| `I` | Show or hide the photo details panel |
+| `Esc` | Back to the menu |
+
+**After Yes**, a row of folder buttons appears:
+
+| Key | Does |
+|---|---|
+| `Enter` | Just `Keep` (no subfolder) |
+| `1`–`9` | That folder, e.g. `Keep\Holiday` |
+| `F` | **New folder**: type a name, and the photo goes straight in it |
+| `Esc` | Cancel, back to Yes / No |
+
+The folders you make stay there, so they're ready for the next photo and the next time you open the app.
+
+### Straight into your own folders
+
+Want to skip Keep / Delete? Choose **Straight into my own folders** on the menu and type up to 9 names, one per line.
+Press `1`–`9` (or click the buttons) to send each photo to that folder.
+
+---|---|
 | `Y` or `→` | **Yes**: copy to `Keep` |
 | `N` or `←` | **No**: copy to `Delete` |
 | `Space` | Skip for now (it comes back next time) |

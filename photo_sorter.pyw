@@ -16,7 +16,7 @@ import threading
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 try:
     from PIL import Image, ImageOps, ImageTk
@@ -329,9 +329,9 @@ class PhotoSorter:
         self.mode_var = tk.StringVar(value=s.get("mode", "keep"))
         rb = dict(bg=PANEL, fg=FG, selectcolor=PANEL, activebackground=PANEL,
                   activeforeground=FG, font=("Segoe UI", 10), command=self.update_mode)
-        tk.Radiobutton(box, text="Keep / Delete   (Round 1)", value="keep",
+        tk.Radiobutton(box, text="Keep / Delete   (Yes lets you pick or make a folder inside Keep)", value="keep",
                        variable=self.mode_var, **rb).grid(row=8, column=0, columnspan=3, sticky="w")
-        tk.Radiobutton(box, text="Into my own folders   (Round 2 - one folder name per line)",
+        tk.Radiobutton(box, text="Straight into my own folders   (one folder name per line)",
                        value="cats", variable=self.mode_var, **rb).grid(row=9, column=0, columnspan=3, sticky="w")
         self.cat_text = tk.Text(box, width=40, height=6, font=("Segoe UI", 10))
         self.cat_text.insert("1.0", s.get("categories", DEFAULT_CATEGORIES))
@@ -413,8 +413,7 @@ class PhotoSorter:
         self.history = []  # for undo: (pos, src, dest)
         self.counts = {c: 0 for c in cats}
         for c, _ in done.values():
-            if c in self.counts:
-                self.counts[c] += 1
+            self.counts[c] = self.counts.get(c, 0) + 1
 
         if not photos:
             messagebox.showinfo("Photo Sorter", "No photos found in that folder.")
@@ -456,39 +455,98 @@ class PhotoSorter:
         self.canvas.pack(fill="both", expand=True)
         self.button(bottom, "↶ Undo  (Backspace)", self.undo, color="#555555", size=10).pack(side="left")
         self.button(bottom, "Skip  (Space)", self.skip, color="#555555", size=10).pack(side="right")
-        mid = tk.Frame(bottom, bg=PANEL)
-        mid.pack(side="top")
-
-        self.cat_buttons = {}
-        self.keymap = {}
-        if self.mode == "keep":
-            spec = [("Delete", "✗  NO  (N / ←)", RED, ["n", "Left"]),
-                    ("Keep", "✓  YES  (Y / →)", GREEN, ["y", "Right"])]
-            for cat, text, color, keys in spec:
-                b = self.button(mid, text, lambda c=cat: self.choose(c), color=color, size=16, width=16)
-                b.pack(side="left", padx=12)
-                self.cat_buttons[cat] = b
-                for k in keys:
-                    self.keymap[k] = cat
-        else:
-            for i, cat in enumerate(self.cats, 1):
-                b = self.button(mid, f"{i}  {cat}", lambda c=cat: self.choose(c), color=BLUE, size=13)
-                b.pack(side="left", padx=5)
-                self.cat_buttons[cat] = b
-                self.keymap[str(i)] = cat
+        self.mid = tk.Frame(bottom, bg=PANEL)
+        self.mid.pack(side="top")
+        self.show_main_buttons()
 
         self.root.bind("<Key>", self.on_key)
         self.canvas.bind("<Configure>", lambda e: self.render())
         self.show_current()
 
+    # ---- the buttons along the bottom
+
+    def _reset_mid(self):
+        for w in self.mid.winfo_children():
+            w.destroy()
+        self.cat_buttons = {}
+        self.keymap = {}  # key -> action
+
+    def show_main_buttons(self):
+        self.picking = False
+        self._reset_mid()
+        mid = self.mid
+        if self.mode == "keep":
+            no = self.button(mid, "✗  NO  (N / ←)", lambda: self.choose("Delete"), color=RED, size=16, width=16)
+            yes = self.button(mid, "✓  YES  (Y / →)", self.show_folder_picker, color=GREEN, size=16, width=16)
+            no.pack(side="left", padx=12)
+            yes.pack(side="left", padx=12)
+            self.cat_buttons["Delete"] = no
+            for k in ("n", "Left"):
+                self.keymap[k] = lambda: self.choose("Delete")
+            for k in ("y", "Right"):
+                self.keymap[k] = self.show_folder_picker
+            # power-user shortcut: number keys file straight into a Keep folder
+            for i, name in enumerate(self.keep_folders()[:9], 1):
+                self.keymap[str(i)] = lambda n=name: self.choose(os.path.join("Keep", n))
+        else:
+            for i, cat in enumerate(self.cats, 1):
+                b = self.button(mid, f"{i}  {cat}", lambda c=cat: self.choose(c), color=BLUE, size=13)
+                b.pack(side="left", padx=5)
+                self.cat_buttons[cat] = b
+                self.keymap[str(i)] = lambda c=cat: self.choose(c)
+
+    def keep_folders(self):
+        keep = os.path.join(self.out, "Keep")
+        try:
+            return sorted((d for d in os.listdir(keep)
+                           if os.path.isdir(os.path.join(keep, d)) and not d.startswith(".")), key=str.lower)
+        except FileNotFoundError:
+            return []
+
+    def show_folder_picker(self):
+        if self.pos >= len(self.queue):
+            return
+        self.picking = True
+        self._reset_mid()
+        top = tk.Frame(self.mid, bg=PANEL)
+        top.pack()
+        self.label(top, "Keep it in which folder?", 12, True).pack(side="left", padx=(0, 12))
+        self.button(top, "Keep  (Enter)", lambda: self.choose("Keep"), color=GREEN, size=12).pack(side="left", padx=4)
+        for k in ("Return", "y", "Right", "0", "KP_Enter"):
+            self.keymap[k] = lambda: self.choose("Keep")
+        self.button(top, "+  New folder  (F)", self.new_folder, color="#7a5cb8", size=12).pack(side="left", padx=4)
+        self.keymap["f"] = self.keymap["plus"] = self.new_folder
+        self.button(top, "Cancel  (Esc)", self.show_main_buttons, color="#555555", size=10).pack(side="left", padx=4)
+        self.keymap["Escape"] = self.show_main_buttons
+
+        row = None
+        for i, name in enumerate(self.keep_folders(), 1):
+            if (i - 1) % 8 == 0:  # wrap onto a new row every 8 folders
+                row = tk.Frame(self.mid, bg=PANEL)
+                row.pack(pady=(8, 0))
+            text = f"{i}  {name}" if i <= 9 else name
+            self.button(row, text, lambda n=name: self.choose(os.path.join("Keep", n)),
+                        color=BLUE, size=12).pack(side="left", padx=4)
+            if i <= 9:
+                self.keymap[str(i)] = lambda n=name: self.choose(os.path.join("Keep", n))
+
+    def new_folder(self):
+        name = simpledialog.askstring("New folder", "Name for the new folder inside Keep:", parent=self.root)
+        name = "".join(c for c in (name or "") if c not in '<>:"/\\|?*').strip(" .")
+        if not name:
+            self.root.focus_force()
+            return
+        self.root.focus_force()
+        self.choose(os.path.join("Keep", name))
+
     def on_key(self, e):
         if isinstance(e.widget, (tk.Entry, tk.Text)) and e.widget is not getattr(self, "meta_text", None):
             return
         key = e.keysym if len(e.keysym) > 1 else e.keysym.lower()
-        if key == "i":
+        if key in self.keymap:
+            self.keymap[key]()
+        elif key == "i":
             self.toggle_info()
-        elif key in self.keymap:
-            self.choose(self.keymap[key])
         elif key == "space":
             self.skip()
         elif key in ("BackSpace", "z") :
@@ -600,9 +658,13 @@ class PhotoSorter:
         self.history.append((self.pos, src, dest, cat))
         self.flash(cat)
         self.pos += 1
+        if getattr(self, "picking", False) or (self.mode == "keep" and cat.startswith("Keep" + os.sep)):
+            self.show_main_buttons()  # back to Yes/No (and pick up any new folder)
         self.show_current()
 
     def skip(self):
+        if getattr(self, "picking", False):
+            self.show_main_buttons()
         if self.pos < len(self.queue):
             self.history.append((self.pos, None, None, None))
             self.pos += 1
@@ -626,6 +688,7 @@ class PhotoSorter:
         if not hasattr(self, "canvas") or not self.canvas.winfo_exists():
             self.show_sorter()
         else:
+            self.show_main_buttons()
             self.show_current()
 
     def back_to_menu(self):
